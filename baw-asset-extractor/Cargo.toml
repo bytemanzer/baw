@@ -1,0 +1,7 @@
+[package]
+name = "baw-asset-extractor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+petro-meg = { version = "1.0.5", default-features = false, features = ["v1", "reader"] }
