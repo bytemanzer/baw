@@ -399,9 +399,19 @@ name = "baw-asset-extractor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "petro-meg",
+ "quick-xml",
+ "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "baw-asset-extractor-cli"
+version = "0.1.0"
+dependencies = [
+ "baw-asset-extractor",
+ "clap",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use walkdir::WalkDir;
 
-use super::{Asset, AssetFinder, AssetVisitor};
+use crate::{Asset, AssetFinder, AssetVisitor, path_starts_with_ignore_case};
 
 struct FileAsset<'p> {
     full_path: &'p Path,
@@ -27,14 +27,14 @@ impl<'p> Asset for FileAsset<'p> {
 }
 
 /// Finds assets by walking the directory tree of the `Data` folder in `GameData`.
-pub(super) struct FileAssetFinder<'p> {
+pub struct FileAssetFinder<'p> {
     /// Path to the `GameData` folder.
     game_data: &'p Path,
 }
 
 impl<'p> FileAssetFinder<'p> {
     /// Make a file asset finder that searches the given directory.
-    pub(super) fn new(game_data: &'p Path) -> Self {
+    pub fn new(game_data: &'p Path) -> Self {
         Self { game_data }
     }
 }
@@ -45,11 +45,8 @@ impl<'a> AssetFinder for FileAssetFinder<'a> {
             .follow_links(true)
             .into_iter()
             .filter_entry(|entry| {
-                entry
-                    .path()
-                    .strip_prefix(self.game_data)
-                    .unwrap()
-                    .starts_with("Data")
+                let path = entry.path().strip_prefix(self.game_data).unwrap();
+                path_starts_with_ignore_case(path, "Data")
             });
         for entry in walker {
             let entry = entry?;

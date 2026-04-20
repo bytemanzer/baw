@@ -1,8 +1,9 @@
 use std::io::{self, Read};
 use std::path::Path;
 
-mod file;
-mod meg;
+pub mod file;
+pub mod meg;
+pub mod models;
 
 /// Represents a file within the game, possibly independent, possibly packed in a MEGA file.
 pub trait Asset {
@@ -71,3 +72,22 @@ macro_rules! tuple_visitors {
 }
 
 tuple_visitors!(V1 V2 V3 V4 V5 V6 V7 V8 V9 V10 V11 V12 V13 V14 V15 V16 V17 V18 V19 V20);
+
+fn path_starts_with_ignore_case(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> bool {
+    let mut path = path.as_ref().components();
+    let mut prefix = prefix.as_ref().components();
+    loop {
+        match (path.next(), prefix.next()) {
+            (Some(_), None) | (None, None) => return true,
+            (None, Some(_)) => return false,
+            (Some(path_component), Some(prefix_component)) => {
+                if !path_component
+                    .as_os_str()
+                    .eq_ignore_ascii_case(prefix_component.as_os_str())
+                {
+                    return false;
+                }
+            }
+        }
+    }
+}
