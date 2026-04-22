@@ -1,0 +1,25 @@
+pub const SKELETON: u32 = 0x0000_0200;
+pub const BONE_COUNT: u32 = 0x0000_0201;
+pub const BONE: u32 = 0x0000_0202;
+pub const BONE_NAME: u32 = 0x0000_0203;
+pub const BONE_V1: u32 = 0x0000_0205;
+pub const BONE_V2: u32 = 0x0000_0206;
+
+pub const MESH: u32 = 0x0000_0400;
+pub const MESH_NAME: u32 = 0x0000_0401;
+pub const MESH_INFO: u32 = 0x0000_0402;
+pub const SUBMESH_MATERIAL: u32 = 0x0001_0100;
+pub const SUBMESH_DATA: u32 = 0x0001_0000;
+pub const SUBMESH_INFO: u32 = 0x0001_0001;
+pub const SUBMESH_VERTEX_FORMAT: u32 = 0x0001_0002;
+pub const SUBMESH_INDEX_BUF: u32 = 0x0001_0004;
+pub const SUBMESH_VERTEX_BUF_V1: u32 = 0x0001_0005;
+pub const SUBMESH_VERTEX_BUF_V2: u32 = 0x0001_0007;
+pub const SUBMESH_ANIM_MAP: u32 = 0x0001_0006;
+pub const SUBMESH_COLLISION: u32 = 0x0000_1200;
+
+pub const LIGHT: u32 = 0x0000_1300;
+
+pub const CONNECTIONS: u32 = 0x0000_0600;
+
+pub const PARTICLES: u32 = 0x0000_0900;

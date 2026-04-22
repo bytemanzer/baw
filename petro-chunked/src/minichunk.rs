@@ -1,7 +1,6 @@
 use crate::ChunkError;
-use crate::byteblock::{FromByteBlock, TakeBytes};
-use crate::content::{ReadContent, ReadContentError};
-use crate::error::InsufficientDataHelper;
+use crate::byteblock::{ConvertBytes, FromByteBlock, TakeBytes};
+use crate::error::ChunkErrorContext;
 
 /// Interprets the given bytes as containing mini-chunks and gets an iterator over them.
 pub fn iter_mini_chunks<'b>(data: &'b [u8]) -> MiniChunksIter<'b> {
@@ -46,33 +45,17 @@ impl<'b> MiniChunk<'b> {
     }
 }
 
-impl<'b> ReadContent<'b> for MiniChunk<'b> {
-    fn read<T: FromByteBlock<'b>>(&self) -> Result<T, ReadContentError<T::Error>> {
-        self.content.read()
+impl<'b> ConvertBytes<'b> for MiniChunk<'b> {
+    fn convert<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkError> {
+        self.content.convert().err_to_mini_chunk_data(self.id)
     }
 }
 
 impl<'b> FromByteBlock<'b> for MiniChunk<'b> {
-    type Error = ChunkError;
-
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error> {
-        let (id, len): (u8, u8) = bytes.take().err_to_header()?;
-        let content = bytes.take_bytes(len as usize).err_to_data()?;
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (id, len): (u8, u8) = bytes.take().err_to_mini_header()?;
+        let content = bytes.take_bytes(len as usize).err_to_mini_chunk_data(id)?;
         let chunk = MiniChunk { id, content };
         Ok((chunk, bytes))
-    }
-}
-
-impl<'b> FromByteBlock<'b> for Option<MiniChunk<'b>> {
-    type Error = ChunkError;
-
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error> {
-        if bytes.is_empty() {
-            return Ok((None, bytes));
-        }
-        let (id, len): (u8, u8) = bytes.take().err_to_header()?;
-        let content = bytes.take_bytes(len as usize).err_to_data()?;
-        let chunk = MiniChunk { id, content };
-        Ok((Some(chunk), bytes))
     }
 }

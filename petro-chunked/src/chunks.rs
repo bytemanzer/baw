@@ -1,7 +1,7 @@
 use crate::ChunkError;
-use crate::byteblock::{FromByteBlock, FromFixedByteBlock, TakeBytes};
+use crate::byteblock::{ConvertBytes, FromByteBlock, FromFixedByteBlock, TakeBytes};
 use crate::content::DataOrMiniChunks;
-use crate::error::InsufficientDataHelper;
+use crate::error::ChunkErrorContext;
 
 /// Interprets the bytes as containing chunks and gets an iterator over them.
 pub fn iter_chunks<'b>(data: &'b [u8]) -> ChunksIter<'b> {
@@ -15,6 +15,56 @@ pub struct ChunksIter<'b> {
     data: &'b [u8],
 }
 
+impl<'b> ChunksIter<'b> {
+    /// Peek the ID of the next chunk, if there are any left.
+    pub fn peek_id(&self) -> Result<Option<u32>, ChunkError> {
+        let mut data = self.data;
+        data.take()
+    }
+
+    /// Get the next chunk if it matches the given matcher, otherwise error.
+    pub fn expect_chunk<M: ChunkIdMatcher>(&mut self, matcher: M) -> Result<Chunk<'b>, ChunkError> {
+        match self.next() {
+            None => Err(ChunkError::EndOfChunks),
+            Some(Err(e)) => Err(e),
+            Some(Ok(chunk)) if matcher.matches(chunk.id()) => Ok(chunk),
+            Some(Ok(chunk)) => Err(ChunkError::UnexpectedChunk { id: chunk.id() }),
+        }
+    }
+
+    /// Get the next chunk if it matches the given matcher, otherwise return None.
+    pub fn try_expect_chunk<M: ChunkIdMatcher>(
+        &mut self,
+        matcher: M,
+    ) -> Result<Option<Chunk<'b>>, ChunkError> {
+        match self.next() {
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
+            Some(Ok(chunk)) if matcher.matches(chunk.id()) => Ok(Some(chunk)),
+            Some(Ok(_)) => Ok(None),
+        }
+    }
+
+    /// Get the next chunk and verify that it contains data rather than child chunks, then parse the
+    /// data as the target type.
+    pub fn expect_data_chunk_as<T, M>(&mut self, matcher: M) -> Result<T, ChunkError>
+    where
+        T: FromByteBlock<'b>,
+        M: ChunkIdMatcher,
+    {
+        self.expect_chunk(matcher)?.data()?.convert()
+    }
+
+    /// Produce an error if there are chunks/data left over.
+    pub fn expect_empty(mut self) -> Result<(), ChunkError> {
+        match self.next() {
+            Some(Err(e)) => Err(e),
+            Some(Ok(chunk)) => Err(ChunkError::UnexpectedChunk { id: chunk.id() }),
+            None => Ok(()),
+        }
+    }
+}
+
 impl<'b> Iterator for ChunksIter<'b> {
     type Item = Result<Chunk<'b>, ChunkError>;
 
@@ -24,6 +74,36 @@ impl<'b> Iterator for ChunksIter<'b> {
         } else {
             Some(self.data.take())
         }
+    }
+}
+
+/// Utility to match chunk IDs.
+pub trait ChunkIdMatcher {
+    /// Return true if the chunk ID matches this matcher.
+    fn matches(&self, id: u32) -> bool;
+}
+
+impl ChunkIdMatcher for u32 {
+    fn matches(&self, id: u32) -> bool {
+        *self == id
+    }
+}
+
+impl<const SIZE: usize> ChunkIdMatcher for [u32; SIZE] {
+    fn matches(&self, id: u32) -> bool {
+        self.contains(&id)
+    }
+}
+
+impl ChunkIdMatcher for &[u32] {
+    fn matches(&self, id: u32) -> bool {
+        self.contains(&id)
+    }
+}
+
+impl<F: Fn(u32) -> bool> ChunkIdMatcher for F {
+    fn matches(&self, id: u32) -> bool {
+        self(id)
     }
 }
 
@@ -47,18 +127,18 @@ pub enum ChunkContent<'b> {
 
 impl<'b> ChunkContent<'b> {
     /// If the chunk content is data, returns it, otherwise returns none.
-    pub fn data(self) -> Option<DataOrMiniChunks<'b>> {
+    pub fn data(self) -> Result<DataOrMiniChunks<'b>, ChunkError> {
         match self {
-            Self::Data(data) => Some(data),
-            _ => None,
+            Self::Data(data) => Ok(data),
+            _ => Err(ChunkError::ExpectedData),
         }
     }
 
     /// If the chunk content is more chunks, returns an iterator over the child chunks.
-    pub fn children(self) -> Option<ChunksIter<'b>> {
+    pub fn children(self) -> Result<ChunksIter<'b>, ChunkError> {
         match self {
-            Self::Chunks(chunks) => Some(chunks),
-            _ => None,
+            Self::Chunks(chunks) => Ok(chunks),
+            _ => Err(ChunkError::ExpectedChunks),
         }
     }
 }
@@ -87,14 +167,14 @@ impl<'b> Chunk<'b> {
     }
 
     /// If the chunk contains plain data or mini chunks, returns the data. If the chunk contains
-    /// more chunks, return None.
-    pub fn data(&self) -> Option<DataOrMiniChunks<'b>> {
+    /// more chunks, return an error.
+    pub fn data(&self) -> Result<DataOrMiniChunks<'b>, ChunkError> {
         self.content().data()
     }
 
     /// If the chunk contains child chunks but not mini chunks, returns an iterator over the
-    /// children.
-    pub fn children(&self) -> Option<ChunksIter<'b>> {
+    /// children. Otherwise returns an error.
+    pub fn children(&self) -> Result<ChunksIter<'b>, ChunkError> {
         self.content().children()
     }
 }
@@ -122,24 +202,10 @@ impl<'b> FromFixedByteBlock<'b> for LenKind {
 }
 
 impl<'b> FromByteBlock<'b> for Chunk<'b> {
-    type Error = ChunkError;
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error> {
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
         let (id, LenKind { len, kind }) = bytes.take().err_to_header()?;
-        let content = bytes.take_bytes(len).err_to_data()?;
+        let content = bytes.take_bytes(len).err_to_data(id)?;
         let chunk = Chunk { id, kind, content };
         Ok((chunk, bytes))
-    }
-}
-
-impl<'b> FromByteBlock<'b> for Option<Chunk<'b>> {
-    type Error = ChunkError;
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error> {
-        if bytes.is_empty() {
-            return Ok((None, bytes))
-        }
-        let (id, LenKind { len, kind }) = bytes.take().err_to_header()?;
-        let content = bytes.take_bytes(len).err_to_data()?;
-        let chunk = Chunk { id, kind, content };
-        Ok((Some(chunk), bytes))
     }
 }

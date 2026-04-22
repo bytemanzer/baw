@@ -2,21 +2,8 @@
 use std::marker::PhantomData;
 
 use byteorder::{ByteOrder, LE};
-use thiserror::Error;
 
-/// Error returned when a Read call wouldn't have enough data to get the requested amount of
-/// content.
-#[derive(Error, Debug)]
-#[error(
-    "Not enough data to take the requested number of bytes. Requested: {requested}, Available: \
-    {available}"
-)]
-pub struct NotEnoughData {
-    /// Number of bytes requested to read.
-    pub requested: usize,
-    /// Number of bytes that were available to read.
-    pub available: usize,
-}
+use crate::ChunkError;
 
 /// Trait for taking bytes from a byte slice. Unlike [std::io::Read], it directly returns bytes and
 /// the only error is 'insufficient data'.
@@ -25,10 +12,10 @@ pub trait TakeBytes<'b> {
     /// resliced to remove the taken data. Equivalent to:
     ///
     /// ```
-    /// # use petro_chunked::byteblock::NotEnoughData;
-    /// fn take_bytes<'b>(data: &mut &'b[u8], n: usize) -> Result<&'b [u8], NotEnoughData> {
+    /// # use petro_chunked::byteblock::ChunkError;
+    /// fn take_bytes<'b>(data: &mut &'b[u8], n: usize) -> Result<&'b [u8], ChunkError> {
     ///     if data.len() < n {
-    ///         return Err(NotEnoughData {
+    ///         return Err(ChunkError::NotEnoughData {
     ///             requested: n,
     ///             available: data.len(),
     ///         });
@@ -39,15 +26,24 @@ pub trait TakeBytes<'b> {
     /// }
     /// # let mut data: &[u8] = b"Hello World";
     /// # assert!(matches!(take_bytes(&mut data, 5), Ok(b"Hello")));
-    /// # assert!(matches!(take_bytes(&mut data, 7), Err(NotEnoughData { requested: 7, available: 6 })));
+    /// # assert!(matches!(take_bytes(&mut data, 7), Err(ChunkError::NotEnoughData { requested: 7, available: 6 })));
     /// ```
-    fn take_bytes(&mut self, n: usize) -> Result<&'b [u8], NotEnoughData>;
+    fn take_bytes(&mut self, n: usize) -> Result<&'b [u8], ChunkError>;
 
     /// Take a value off the data. Value must implement FixedSizeTakeable.
-    fn take<T: FromByteBlock<'b>>(&mut self) -> Result<T, T::Error>;
+    ///
+    /// In case of error, no bytes are taken.
+    fn take<T: FromByteBlock<'b>>(&mut self) -> Result<T, ChunkError>;
+
+    /// Take some bytes, erroring if T does not consume all remaining bytes in this block.
+    fn take_all<T: FromByteBlock<'b>>(&mut self) -> Result<T, ChunkError> {
+        Ok(self.take::<TakeAll<T>>()?.0)
+    }
 
     /// Utility to map the result of taking some data, where the type to take can be inferred from
     /// the function's argument type.
+    ///
+    /// In case of error, no bytes are taken.
     ///
     /// ```
     /// # use petro_chunked::byteblock::TakeBytes;
@@ -61,12 +57,22 @@ pub trait TakeBytes<'b> {
     /// let ex = data.take_map(|(a, b, c)| Example { a, b, c }).unwrap();
     /// assert_eq!(ex, Example { a: 0x3412, b: 0x56, c: 0x78 });
     /// ```
-    fn take_map<F, T, U>(&mut self, func: F) -> Result<U, T::Error>
+    fn take_map<F, T, U>(&mut self, func: F) -> Result<U, ChunkError>
     where
         F: FnOnce(T) -> U,
         T: FromByteBlock<'b>,
     {
         self.take::<T>().map(func)
+    }
+
+    /// Utility to map the result of taking all remaining data, where the type to take can be
+    /// inferred from the function's argument type.
+    fn take_all_map<F, T, U>(&mut self, func: F) -> Result<U, ChunkError>
+    where
+        F: FnOnce(T) -> U,
+        T: FromByteBlock<'b>,
+    {
+        self.take_map(move |val: TakeAll<T>| func(val.0))
     }
 
     /// Returns an iterator which will repeatedly try to take elements out of this source until the
@@ -79,9 +85,9 @@ pub trait TakeBytes<'b> {
 }
 
 impl<'b> TakeBytes<'b> for &'b [u8] {
-    fn take_bytes(&mut self, n: usize) -> Result<&'b [u8], NotEnoughData> {
+    fn take_bytes(&mut self, n: usize) -> Result<&'b [u8], ChunkError> {
         if self.len() < n {
-            return Err(NotEnoughData {
+            return Err(ChunkError::NotEnoughData {
                 requested: n,
                 available: self.len(),
             });
@@ -91,7 +97,7 @@ impl<'b> TakeBytes<'b> for &'b [u8] {
         Ok(result)
     }
 
-    fn take<T: FromByteBlock<'b>>(&mut self) -> Result<T, T::Error> {
+    fn take<T: FromByteBlock<'b>>(&mut self) -> Result<T, ChunkError> {
         let (res, rest) = T::take_from(*self)?;
         *self = rest;
         Ok(res)
@@ -105,6 +111,30 @@ impl<'b> TakeBytes<'b> for &'b [u8] {
     }
 }
 
+/// Converts a block of bytes into another type. This is like using [`TakeBytes::take_all`] but lets
+/// you call it on an immutable slice without mutating the slice.
+pub trait ConvertBytes<'b> {
+    /// Read the content as the given byte block type.
+    fn convert<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkError>;
+
+    /// Utility to map the result of taking some data, where the type to take can be inferred from
+    /// the function's argument type.
+    fn convert_map<F, T, U>(&self, func: F) -> Result<U, ChunkError>
+    where
+        F: FnOnce(T) -> U,
+        T: FromByteBlock<'b>,
+    {
+        self.convert().map(func)
+    }
+}
+
+impl<'b> ConvertBytes<'b> for &'b [u8] {
+    fn convert<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkError> {
+        let mut bytes: &'b [u8] = *self;
+        bytes.take_all()
+    }
+}
+
 /// An iterator which repeatedly takes elements of some type from the underlying data.
 pub struct TakeIter<'a, 'b, T> {
     /// Remaining data to take from.
@@ -113,7 +143,7 @@ pub struct TakeIter<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: FromByteBlock<'b>> Iterator for TakeIter<'a, 'b, T> {
-    type Item = Result<T, T::Error>;
+    type Item = Result<T, ChunkError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
@@ -126,13 +156,11 @@ impl<'a, 'b, T: FromByteBlock<'b>> Iterator for TakeIter<'a, 'b, T> {
 
 /// Helper for taking some data from a block of bytes.
 pub trait FromByteBlock<'b> {
-    type Error;
-
     /// Take this item from the given byte block, returning self and the remaining unused bytes.
     ///
     /// Returning the "rest" allow this to be used in combinators in a way that ensures that no
     /// modifications are made to the root unless all children succeed.
-    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error>
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError>
     where
         Self: Sized;
 }
@@ -151,7 +179,7 @@ pub trait FromFixedByteBlock<'b> {
     fn from_bytes(bytes: &'b [u8]) -> Self;
 
     /// Try to construct this block type from the given bytes, if there is enough bytes.
-    fn try_from_bytes(bytes: &'b [u8]) -> Result<Self, NotEnoughData>
+    fn try_from_bytes(bytes: &'b [u8]) -> Result<Self, ChunkError>
     where
         Self: Sized,
     {
@@ -164,9 +192,7 @@ impl<'b, T> FromByteBlock<'b> for T
 where
     T: FromFixedByteBlock<'b>,
 {
-    type Error = NotEnoughData;
-
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), NotEnoughData>
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError>
     where
         Self: Sized,
     {
@@ -203,6 +229,30 @@ macro_rules! le_takeable {
     )* };
 }
 
+/// Wraps a value of any type that implements `FromByteBlock` and forces it to consume the entire
+/// block, producing an UnusedData error if the block has any data left after it is read. This is
+/// similar in principle to wrapping a regex with `^$`.
+///
+/// Usage:
+/// ```
+/// # use petro_chunked::byteblock::{TakeBytes, TakeAll, TakeBytesError};
+/// let mut data: &[u8] = &[0x12, 0x34, 0x56, 0x78];
+/// let res = data.take::<TakeAll<u16>>();
+/// assert!(matches!(res, Err(TakeBytesError::UnusedData { len: 2 })));
+/// ```
+struct TakeAll<T>(T);
+
+impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for TakeAll<T> {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (inner, rest) = T::take_from(bytes)?;
+        if rest.is_empty() {
+            Ok((Self(inner), rest))
+        } else {
+            Err(ChunkError::UnusedData { len: rest.len() })
+        }
+    }
+}
+
 le_takeable!(
     u16 => read_u16,
     i16 => read_i16,
@@ -237,14 +287,26 @@ where
 }
 
 impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for Vec<T> {
-    type Error = T::Error;
-
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), T::Error>
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError>
     where
         Self: Sized,
     {
         let res = bytes.take_iter::<T>().collect::<Result<_, _>>()?;
         Ok((res, bytes))
+    }
+}
+
+impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for Option<T> {
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError>
+    where
+        Self: Sized,
+    {
+        if bytes.is_empty() {
+            Ok((None, bytes))
+        } else {
+            let res = bytes.take()?;
+            Ok((Some(res), bytes))
+        }
     }
 }
 
@@ -260,27 +322,21 @@ macro_rules! tuple_takeable {
       tuple_takeable!($($rest)*);
       tuple_takeable!(@inner [ $t $($rest)* ]);
     };
-    (@inner [ $t:ident $($rest:ident)* ]) => {
-        impl<'b, $t, $($rest,)*> FromByteBlock<'b> for ( $t, $($rest,)* )
+    (@inner [ $($t:ident)* ]) => {
+        impl<'b, $($t,)*> FromByteBlock<'b> for ( $($t,)* )
         where
-            $t: FromByteBlock<'b>,
         $(
-            $rest: FromByteBlock<'b>,
-            $t::Error: From<$rest::Error>,
+            $t: FromByteBlock<'b>,
         )*
         {
-            type Error = $t::Error;
-
             #[allow(unused)]
-            fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), Self::Error> {
-                #[allow(non_snake_case)]
-                let $t = bytes.take::<$t>()?;
+            fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
                 $(
                     #[allow(non_snake_case)]
-                    let $rest = bytes.take::<$rest>()?;
+                    let $t = bytes.take::<$t>()?;
                 )*
 
-                Ok((( $t, $( $rest, )* ), bytes))
+                Ok((( $( $t, )* ), bytes))
             }
         }
     };
@@ -299,7 +355,7 @@ mod tests {
         assert_eq!(data, b" World");
         assert!(matches!(
             data.take_bytes(7),
-            Err(NotEnoughData {
+            Err(ChunkError::NotEnoughData {
                 requested: 7,
                 available: 6
             })
