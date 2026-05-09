@@ -1,0 +1,11 @@
+[package]
+name = "bevy-alo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = "^0.18.1"
+bytemuck = { version = "^1.25.0", features = ["extern_crate_alloc"] }
+thiserror = "^2.0.18"
+
+petro-alo = { version = "^0.1.0", path = "../petro-alo" }

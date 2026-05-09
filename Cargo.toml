@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["baw", "baw-asset-extractor", "baw-asset-extractor-cli", "petro-alo", "petro-chunked"]
+members = ["baw", "baw-asset-extractor", "baw-asset-extractor-cli", "bevy-alo", "petro-alo", "petro-chunked"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

@@ -6,7 +6,7 @@ use anyhow::Context;
 use bitflags::bitflags;
 use clap::Parser;
 use glam::Vec4Swizzles;
-use petro_alo::Alo;
+use petro_alo::AloFile;
 use petro_alo::mesh::{Mesh, Submesh};
 use petro_alo::skeleton::Bone;
 
@@ -44,8 +44,8 @@ fn main() -> anyhow::Result<()> {
     for file in args.files {
         let content =
             std::fs::read(&file).with_context(|| format!("parsing file {}", file.display()))?;
-        let alo = petro_alo::parse(&content)
-            .with_context(|| format!("parsing file {}", file.display()))?;
+        let alo =
+            AloFile::parse(&content).with_context(|| format!("parsing file {}", file.display()))?;
         println!("{}:", file.display());
         show_model(&alo, &mut formats, Indent::new(4));
     }
@@ -59,7 +59,11 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn show_model(model: &Alo, formats: &mut BTreeMap<String, BTreeSet<VertexFields>>, indent: Indent) {
+fn show_model(
+    model: &AloFile,
+    formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
+    indent: Indent,
+) {
     println!("{indent}Skeleton:");
     show_bones(&model.skeleton.bones, None, indent.bump());
     println!("{indent}Meshes:");

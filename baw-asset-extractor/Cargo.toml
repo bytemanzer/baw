@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.102"
-petro-meg = { version = "1.0.5", default-features = false, features = ["v1", "reader"] }
-quick-xml = "0.39.2"
-tracing = "0.1.44"
-walkdir = "2.5.0"
+anyhow = "^1.0.102"
+petro-meg = { version = "^1.0.5", default-features = false, features = ["v1", "reader"] }
+quick-xml = "^0.39.2"
+tracing = "^0.1.44"
+walkdir = "^2.5.0"

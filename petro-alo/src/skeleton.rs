@@ -9,7 +9,7 @@ use crate::ids;
 use crate::primitives::{U32Bool, U32Usize, expect_string_chunk};
 
 /// How a bone should apply billboarding.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum BillboardMode {
     /// No billboarding.
     #[default]

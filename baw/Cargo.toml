@@ -4,4 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.18.1"
+bevy = { version = "0.18.1", features = ["debug"] }
+bevy_panorbit_camera = "0.34.0"
+clap = { version = "4.6.1", features = ["derive"] }
+
+bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
