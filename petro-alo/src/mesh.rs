@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::error::FormatError;
 use crate::ids;
-use crate::primitives::{U32Bool, U32Usize, expect_string_chunk};
+use crate::primitives::{U32Bool, U32Usize};
 
 /// Bounding box for a mesh.
 #[derive(Default, Debug, Copy, Clone)]
@@ -27,14 +27,29 @@ pub struct Mesh {
     /// Whether the mesh is (initially) hidden.
     pub hidden: bool,
     pub submeshes: Vec<Submesh>,
+    /// Bone to attach this mesh to.
+    pub parent_bone: Option<usize>,
 }
 
 impl Mesh {
     pub(crate) fn parse(content: ChunkContent) -> anyhow::Result<Self> {
         let mut chunks = content.children().context("parsing mesh")?;
 
-        let name = expect_string_chunk(&mut chunks, ids::MESH_NAME)
-            .context("parsing the mesh name (chunk 00000401)")?;
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the mesh name (chunk 00000401)")]
+        struct MeshNameCtx;
+
+        let name = chunks
+            .expect_chunk(ids::MESH_NAME)
+            .context(MeshNameCtx)?
+            .data()
+            .context(MeshNameCtx)?
+            .convert()
+            .context(MeshNameCtx)?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the mesh info (chunk 00000402)")]
+        struct MeshInfoCtx;
 
         type MeshInfo<'b> = (U32Usize, [[f32; 3]; 2], u32, U32Bool, U32Bool, &'b [u8; 88]);
         let (
@@ -49,8 +64,12 @@ impl Mesh {
             },
             _padding,
         ): MeshInfo = chunks
-            .expect_data_chunk_as(ids::MESH_INFO)
-            .context("parsing the mesh info (chunk 00000402)")?;
+            .expect_chunk(ids::MESH_INFO)
+            .context(MeshInfoCtx)?
+            .data()
+            .context(MeshInfoCtx)?
+            .convert()
+            .context(MeshInfoCtx)?;
         let bounds = BoundingBox {
             start: Vec3::from_array(bounds[0]),
             end: Vec3::from_array(bounds[1]),
@@ -82,6 +101,7 @@ impl Mesh {
             bounds,
             hidden,
             submeshes,
+            parent_bone: None,
         })
     }
 }
@@ -116,6 +136,10 @@ impl Submesh {
     /// Parse a Submesh from the materials and data chunks.
     fn parse(materials: ChunkContent, data: ChunkContent) -> anyhow::Result<Self> {
         let mut data = data.children()?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the submesh info (chunk 00010001)")]
+        struct SubmeshInfoCtx;
         let (
             U32Usize {
                 value: num_vertices,
@@ -125,10 +149,23 @@ impl Submesh {
             },
             _padding,
         ): (_, _, &[u8; 120]) = data
-            .expect_data_chunk_as(ids::SUBMESH_INFO)
-            .context("parsing the submesh info (chunk 00010001)")?;
-        let vertex_format = expect_string_chunk(&mut data, ids::SUBMESH_VERTEX_FORMAT)
-            .context("parsing the submesh vertex format (chunk 00010002)")?;
+            .expect_chunk(ids::SUBMESH_INFO)
+            .context(SubmeshInfoCtx)?
+            .data()
+            .context(SubmeshInfoCtx)?
+            .convert()
+            .context(SubmeshInfoCtx)?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the submesh vertex format (chunk 00010002)")]
+        struct VertexFmtCtx;
+        let vertex_format = data
+            .expect_chunk(ids::SUBMESH_VERTEX_FORMAT)
+            .context(VertexFmtCtx)?
+            .data()
+            .context(VertexFmtCtx)?
+            .convert()
+            .context(VertexFmtCtx)?;
 
         let mut submesh = Submesh {
             vertex_format,

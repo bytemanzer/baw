@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::error::FormatError;
 use crate::ids;
-use crate::primitives::{U32Bool, U32Usize, expect_string_chunk};
+use crate::primitives::{U32Bool, U32Usize};
 
 /// How a bone should apply billboarding.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -71,8 +71,17 @@ pub struct Bone {
 impl Bone {
     fn parse(content: ChunkContent, existing_bones: &[Bone]) -> anyhow::Result<Self> {
         let mut chunks = content.children()?;
-        let name = expect_string_chunk(&mut chunks, ids::BONE_NAME)
-            .context("parsing the bone name (chunk 00000203)")?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the bone name (chunk 00000203)")]
+        struct BoneNameCtx;
+        let name = chunks
+            .expect_chunk(ids::BONE_NAME)
+            .context(BoneNameCtx)?
+            .data()
+            .context(BoneNameCtx)?
+            .convert()
+            .context(BoneNameCtx)?;
 
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the bone data (chunk 00000205 or 00000206)")]
@@ -141,9 +150,17 @@ impl Skeleton {
     pub(crate) fn parse(content: ChunkContent) -> anyhow::Result<Self> {
         let mut chunks = content.children().context("parsing skeleton")?;
 
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the bone count (chunk 00000201)")]
+        struct BoneCountCtx;
+
         let (U32Usize { value: bone_count }, _pad): (_, &[u8; 124]) = chunks
-            .expect_data_chunk_as(ids::BONE_COUNT)
-            .context("parsing the bone count (chunk 00000201)")?;
+            .expect_chunk(ids::BONE_COUNT)
+            .context(BoneCountCtx)?
+            .data()
+            .context(BoneCountCtx)?
+            .convert()
+            .context(BoneCountCtx)?;
 
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing bone {bone_idx} / {bone_count}")]

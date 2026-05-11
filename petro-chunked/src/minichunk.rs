@@ -13,6 +13,53 @@ pub struct MiniChunksIter<'b> {
     data: &'b [u8],
 }
 
+impl<'b> MiniChunksIter<'b> {
+    /// Peek the ID of the next mini-chunk, if there are any left.
+    pub fn peek_id(&self) -> Result<Option<u8>, ChunkError> {
+        let mut data = self.data;
+        data.take()
+    }
+
+    /// Get the next chunk if it matches the given matcher otherwise error.
+    pub fn expect_chunk<M: MiniChunkIdMatcher>(
+        &mut self,
+        matcher: M,
+    ) -> Result<MiniChunk<'b>, ChunkError> {
+        match self.next() {
+            None => Err(ChunkError::EndOfChunks),
+            Some(Err(e)) => Err(e),
+            Some(Ok(chunk)) if matcher.matches(chunk.id()) => Ok(chunk),
+            Some(Ok(chunk)) => Err(ChunkError::UnexpectedChunk {
+                id: chunk.id() as u32,
+            }),
+        }
+    }
+
+    /// Get the next chunk if it matches the given matcher, otherwise return None.
+    pub fn try_expect_chunk<M: MiniChunkIdMatcher>(
+        &mut self,
+        matcher: M,
+    ) -> Result<Option<MiniChunk<'b>>, ChunkError> {
+        if let Some(id) = self.peek_id()?
+            && matcher.matches(id)
+        {
+            return self.expect_chunk(id).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Produce an error if there are chunks/data left over.
+    pub fn expect_empty(mut self) -> Result<(), ChunkError> {
+        match self.next() {
+            Some(Err(e)) => Err(e),
+            Some(Ok(chunk)) => Err(ChunkError::UnexpectedChunk {
+                id: chunk.id() as u32,
+            }),
+            None => Ok(()),
+        }
+    }
+}
+
 impl<'b> Iterator for MiniChunksIter<'b> {
     type Item = Result<MiniChunk<'b>, ChunkError>;
 
@@ -22,6 +69,36 @@ impl<'b> Iterator for MiniChunksIter<'b> {
         } else {
             Some(self.data.take())
         }
+    }
+}
+
+/// Utility to match mini-chunk IDs.
+pub trait MiniChunkIdMatcher {
+    /// Return true if the chunk ID matches this matcher.
+    fn matches(&self, id: u8) -> bool;
+}
+
+impl MiniChunkIdMatcher for u8 {
+    fn matches(&self, id: u8) -> bool {
+        *self == id
+    }
+}
+
+impl<const SIZE: usize> MiniChunkIdMatcher for [u8; SIZE] {
+    fn matches(&self, id: u8) -> bool {
+        self.contains(&id)
+    }
+}
+
+impl MiniChunkIdMatcher for &[u8] {
+    fn matches(&self, id: u8) -> bool {
+        self.contains(&id)
+    }
+}
+
+impl<F: Fn(u8) -> bool> MiniChunkIdMatcher for F {
+    fn matches(&self, id: u8) -> bool {
+        self(id)
     }
 }
 

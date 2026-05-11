@@ -76,8 +76,8 @@ impl AssetLoader for AloLoader {
 
         let mut meshes = Vec::with_capacity(file.meshes.len());
         for (mesh_idx, mesh) in file.meshes.into_iter().enumerate() {
-            let mesh_id = world
-                .spawn((
+            let mesh_id = {
+                let mut mesh_builder = world.spawn((
                     AloMesh,
                     Transform::IDENTITY,
                     Name::new(mesh.name),
@@ -86,8 +86,12 @@ impl AssetLoader for AloLoader {
                     } else {
                         Visibility::Inherited
                     },
-                ))
-                .id();
+                ));
+                if let Some(bone_idx) = mesh.parent_bone {
+                    mesh_builder.insert(ChildOf(bones[bone_idx]));
+                }
+                mesh_builder.id()
+            };
             for (submesh_idx, mut submesh) in mesh.submeshes.into_iter().enumerate() {
                 alo_to_bevy(&mut submesh.positions);
                 alo_to_bevy(&mut submesh.normals);

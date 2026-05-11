@@ -1,3 +1,6 @@
+use std::ffi::FromBytesUntilNulError;
+use std::str::Utf8Error;
+
 use thiserror::Error;
 
 /// Error results from chunk parsing.
@@ -73,6 +76,18 @@ impl ChunkError {
             chunk: id,
             source: Box::new(self),
         }
+    }
+}
+
+impl From<FromBytesUntilNulError> for ChunkError {
+    fn from(value: FromBytesUntilNulError) -> Self {
+        Self::FormatError(value.into())
+    }
+}
+
+impl From<Utf8Error> for ChunkError {
+    fn from(value: Utf8Error) -> Self {
+        Self::FormatError(value.into())
     }
 }
 

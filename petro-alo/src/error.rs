@@ -31,10 +31,14 @@ pub enum FormatError {
     WrongContentCount { expected: usize, actual: usize },
     #[error("Bone index {idx} is not mapped to a bone.")]
     BoneNotMapped { idx: u32 },
-    #[error("Mesh had bone mappings but there is no skeleton")]
-    MissingSkeleton,
     #[error("Bone mapping to index {idx} is out of range, only {count} bones.")]
     MappingIndexOutOfRange { idx: u32, count: usize },
+    #[error("Connection mapping to bone {idx} out of range, only {count} bones.")]
+    ConnBoneOutOfRange { idx: usize, count: usize },
+    #[error("Connection mapping to object {idx} out of range, only {count} objects.")]
+    ConnObjectOutOfRange { idx: usize, count: usize },
+    #[error("Mesh {mesh_idx} connected to multiple bones")]
+    MultiParentMesh { mesh_idx: usize },
 }
 
 impl From<FormatError> for ChunkError {

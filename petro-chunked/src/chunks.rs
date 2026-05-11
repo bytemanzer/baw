@@ -1,5 +1,5 @@
 use crate::ChunkError;
-use crate::byteblock::{ConvertBytes, FromByteBlock, FromFixedByteBlock, TakeBytes};
+use crate::byteblock::{FromByteBlock, FromFixedByteBlock, TakeBytes};
 use crate::content::DataOrMiniChunks;
 use crate::error::ChunkErrorContext;
 
@@ -37,22 +37,10 @@ impl<'b> ChunksIter<'b> {
         &mut self,
         matcher: M,
     ) -> Result<Option<Chunk<'b>>, ChunkError> {
-        match self.next() {
-            None => Ok(None),
-            Some(Err(e)) => Err(e),
-            Some(Ok(chunk)) if matcher.matches(chunk.id()) => Ok(Some(chunk)),
-            Some(Ok(_)) => Ok(None),
+        if let Some(id) = self.peek_id()? && matcher.matches(id) {
+            return self.expect_chunk(id).map(Some);
         }
-    }
-
-    /// Get the next chunk and verify that it contains data rather than child chunks, then parse the
-    /// data as the target type.
-    pub fn expect_data_chunk_as<T, M>(&mut self, matcher: M) -> Result<T, ChunkError>
-    where
-        T: FromByteBlock<'b>,
-        M: ChunkIdMatcher,
-    {
-        self.expect_chunk(matcher)?.data()?.convert()
+        Ok(None)
     }
 
     /// Produce an error if there are chunks/data left over.

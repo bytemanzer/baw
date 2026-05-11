@@ -1,4 +1,5 @@
 //! Provides utilites for taking bytes out of a chunked file.
+use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
 
 use byteorder::{ByteOrder, LE};
@@ -287,12 +288,38 @@ where
 }
 
 impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for Vec<T> {
-    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError>
-    where
-        Self: Sized,
-    {
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
         let res = bytes.take_iter::<T>().collect::<Result<_, _>>()?;
         Ok((res, bytes))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for &'b CStr {
+    fn take_from(mut bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let s = CStr::from_bytes_until_nul(bytes)?;
+        bytes = &bytes[s.to_bytes_with_nul().len()..];
+        Ok((s, bytes))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for CString {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (s, rest) = <&'b CStr>::take_from(bytes)?;
+        Ok((s.to_owned(), rest))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for &'b str {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (s, rest) = <&'b CStr>::take_from(bytes)?;
+        Ok((s.to_str()?, rest))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for String {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (s, rest) = <&'b str>::take_from(bytes)?;
+        Ok((s.to_owned(), rest))
     }
 }
 
