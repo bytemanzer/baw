@@ -16,18 +16,23 @@ struct Args {
     #[arg(short, long, alias = "source")]
     src: PathBuf,
 
-    /// "assets" directory to extract to. Paths relative to the GameData folder will be made
-    /// relative to this desintation directory.
+    /// "assets" directory to extract to.
     #[arg(short, long, alias = "destination")]
     dest: PathBuf,
+
+    /// Prefix to place extracted assets under, within the assets directory.
+    #[arg(short, long, default_value = "extracted")]
+    prefix: PathBuf,
 }
 
 fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    let mut dest = args.dest;
+    dest.push(&args.prefix);
 
     let finder = FileAssetFinder::new(&args.src).chain(MegAssetFinder::new(&args.src));
-    let mut models = ModelVisitor::new(&args.dest);
+    let mut models = ModelVisitor::new(&dest);
 
     if let Err(e) = finder.find_assets(&mut models) {
         eprintln!("Error processing game assets: {e}");

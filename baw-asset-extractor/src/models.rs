@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
+use anyhow::anyhow;
 use tracing::info;
 
 use crate::{Asset, AssetVisitor};
@@ -24,7 +25,16 @@ impl<'a> AssetVisitor for ModelVisitor<'a> {
             if ext.eq_ignore_ascii_case("alo") || ext.eq_ignore_ascii_case("ala") {
                 let mut out_file = asset.path().to_path_buf();
                 out_file.as_mut_os_str().make_ascii_lowercase();
-                let out_file = self.dest_folder.join(out_file);
+                let filename = out_file
+                    .file_name()
+                    .ok_or_else(|| anyhow!("Missing File Name"))?;
+                let mut out_file = self.dest_folder.to_path_buf();
+                if ext.eq_ignore_ascii_case("ala") {
+                    out_file.push("animations");
+                } else {
+                    out_file.push("models");
+                }
+                out_file.push(filename);
                 if let Some(out_dir) = out_file.parent() {
                     std::fs::create_dir_all(out_dir)?;
                 }
