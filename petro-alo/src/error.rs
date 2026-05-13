@@ -32,13 +32,15 @@ pub enum FormatError {
     #[error("Bone index {idx} is not mapped to a bone.")]
     BoneNotMapped { idx: u32 },
     #[error("Bone mapping to index {idx} is out of range, only {count} bones.")]
-    MappingIndexOutOfRange { idx: u32, count: usize },
+    MappingIndexOutOfRange { idx: usize, count: usize },
     #[error("Connection mapping to bone {idx} out of range, only {count} bones.")]
     ConnBoneOutOfRange { idx: usize, count: usize },
     #[error("Connection mapping to object {idx} out of range, only {count} objects.")]
     ConnObjectOutOfRange { idx: usize, count: usize },
     #[error("Mesh {mesh_idx} connected to multiple bones")]
     MultiParentMesh { mesh_idx: usize },
+    #[error("Vertex format {format:?} not recognized")]
+    UnknownVertexFormat { format: String },
 }
 
 impl From<FormatError> for ChunkError {

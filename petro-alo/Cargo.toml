@@ -5,12 +5,12 @@ edition = "2024"
 
 [dependencies]
 anyhow = "^1.0.102"
+bitflags = "^2.11.1"
 glam = "^0.30.10"
 thiserror = "^2.0.18"
 
 petro-chunked = { version = "0.1.0", path = "../petro-chunked" }
 
 [dev-dependencies]
-bitflags = "^2.11.1"
 clap = { version = "^4.6.1", features = ["derive"] }
 tracing-subscriber = "^0.3.23"

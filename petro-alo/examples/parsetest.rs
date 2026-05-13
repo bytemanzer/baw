@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use clap::Parser;
 use glam::Vec4Swizzles;
 use petro_alo::AloFile;
-use petro_alo::mesh::{Mesh, Submesh};
+use petro_alo::mesh::{Mesh, Submesh, VertexFormat};
 use petro_alo::skeleton::Bone;
 
 bitflags! {
@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
     }
     println!("All discovered vertex formats:");
     for (format, fields) in formats {
-        println!("{format}:");
+        println!("{format}: {:?}", format.parse::<VertexFormat>().unwrap());
         for fmt in fields {
             println!("    {fmt:?}");
         }
@@ -67,7 +67,7 @@ fn show_model(
     println!("{indent}Skeleton:");
     show_bones(&model.skeleton.bones, None, indent.bump());
     println!("{indent}Meshes:");
-    show_meshes(&model.meshes, formats, indent.bump());
+    show_meshes(&model.meshes, &model.skeleton.bones, formats, indent.bump());
 }
 
 fn show_bones(bones: &[Bone], parent: Option<usize>, indent: Indent) {
@@ -87,11 +87,16 @@ fn show_bones(bones: &[Bone], parent: Option<usize>, indent: Indent) {
 
 fn show_meshes(
     meshes: &[Mesh],
+    bones: &[Bone],
     formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
     indent: Indent,
 ) {
     for mesh in meshes {
-        println!("{indent}{}:", mesh.name);
+        print!("{indent}{}:", mesh.name);
+        match mesh.parent_bone {
+            Some(bidx) => println!(" [{}]", bones[bidx].name),
+            None => println!(),
+        }
         for (idx, submesh) in mesh.submeshes.iter().enumerate() {
             let indent = indent.bump();
             println!(
@@ -99,7 +104,7 @@ fn show_meshes(
                 submesh.vertex_format
             );
             formats
-                .entry(submesh.vertex_format.clone())
+                .entry(submesh.vertex_format_string.clone())
                 .or_default()
                 .insert(find_used_vertex_values(submesh));
         }

@@ -37,7 +37,9 @@ impl<'b> ChunksIter<'b> {
         &mut self,
         matcher: M,
     ) -> Result<Option<Chunk<'b>>, ChunkError> {
-        if let Some(id) = self.peek_id()? && matcher.matches(id) {
+        if let Some(id) = self.peek_id()?
+            && matcher.matches(id)
+        {
             return self.expect_chunk(id).map(Some);
         }
         Ok(None)

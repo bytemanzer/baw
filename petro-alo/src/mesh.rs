@@ -1,6 +1,7 @@
-use std::u16;
+use std::str::FromStr;
 
 use anyhow::Context;
+use bitflags::bitflags;
 use glam::Vec3;
 use petro_chunked::ChunkContent;
 use petro_chunked::byteblock::{ConvertBytes, TakeBytes};
@@ -8,7 +9,7 @@ use thiserror::Error;
 
 use crate::error::FormatError;
 use crate::ids;
-use crate::primitives::{U32Bool, U32Usize};
+use crate::primitives::{U32Bool, U32Usize, U32UsizeVec};
 
 /// Bounding box for a mesh.
 #[derive(Default, Debug, Copy, Clone)]
@@ -106,6 +107,74 @@ impl Mesh {
     }
 }
 
+bitflags! {
+    /// Identifies which vertex fields should actually be bound.
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub struct VertexFormat : u32 {
+        const Positions = 0x01;
+        const Normals = 0x02;
+        const TexCoords = 0x04;
+        const TangentBinormals = 0x08;
+        const Colors = 0x10;
+        const Bones = 0x20;
+    }
+}
+
+impl FromStr for VertexFormat {
+    type Err = FormatError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let vertex_format = match s {
+            "alD3dVertN" => VertexFormat::Positions | VertexFormat::Normals,
+            "alD3dVertNU2" => {
+                VertexFormat::Positions | VertexFormat::Normals | VertexFormat::TexCoords
+            }
+            "alD3dVertNU2C" => {
+                VertexFormat::Positions
+                    | VertexFormat::Normals
+                    | VertexFormat::TexCoords
+                    | VertexFormat::Colors
+            }
+            "alD3dVertNU2U3U3" => {
+                VertexFormat::Positions
+                    | VertexFormat::Normals
+                    | VertexFormat::TexCoords
+                    | VertexFormat::TangentBinormals
+            }
+            "alD3dVertNU2U3U3C" => {
+                VertexFormat::Positions
+                    | VertexFormat::Normals
+                    | VertexFormat::TexCoords
+                    | VertexFormat::TangentBinormals
+                    | VertexFormat::Colors
+            }
+            "alD3dVertRSkinNU2" | "alD3dVertB4I4NU2" => {
+                VertexFormat::Positions
+                    | VertexFormat::Normals
+                    | VertexFormat::TexCoords
+                    | VertexFormat::Bones
+            }
+            "alD3dVertRSkinNU2U3U3" | "alD3dVertB4I4NU2U3U3" => {
+                VertexFormat::Positions
+                    | VertexFormat::Normals
+                    | VertexFormat::TexCoords
+                    | VertexFormat::TangentBinormals
+                    | VertexFormat::Bones
+            }
+            "alD3dVertGrass" => {
+                // TODO: ????? what should this do
+                VertexFormat::Positions
+            }
+            _ => {
+                return Err(FormatError::UnknownVertexFormat {
+                    format: s.to_owned(),
+                });
+            }
+        };
+        Ok(vertex_format)
+    }
+}
+
 /// Holds properties of a SubMesh.
 #[derive(Debug)]
 pub struct Submesh {
@@ -114,13 +183,15 @@ pub struct Submesh {
     ///
     /// TODO: Figure out what each of the values actually means and avoid copying (leave empty) the
     /// vertex buffers which aren't used.
-    pub vertex_format: String,
+    pub vertex_format_string: String,
+    /// Interpreted vertex format.
+    pub vertex_format: VertexFormat,
     /// Buffer of vertex indices. Each index points into all of the vertex buffers, sets of 3
     /// vertices make a triangle.
     pub primitives: Vec<[u16; 3]>,
     /// Mappings from indexes used by bone_indices (which refer to this array) to bones in the
     /// skeleton segment (referenced by the u32 values held here).
-    pub bone_mappings: Vec<u32>,
+    pub bone_mappings: Vec<usize>,
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub tex_coords: [Vec<[f32; 2]>; 4],
@@ -159,15 +230,17 @@ impl Submesh {
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the submesh vertex format (chunk 00010002)")]
         struct VertexFmtCtx;
-        let vertex_format = data
+        let vertex_format_string: String = data
             .expect_chunk(ids::SUBMESH_VERTEX_FORMAT)
             .context(VertexFmtCtx)?
             .data()
             .context(VertexFmtCtx)?
             .convert()
             .context(VertexFmtCtx)?;
+        let vertex_format = vertex_format_string.parse().context(VertexFmtCtx)?;
 
         let mut submesh = Submesh {
+            vertex_format_string,
             vertex_format,
             primitives: Vec::new(),
             bone_mappings: Vec::new(),
@@ -387,7 +460,8 @@ impl Submesh {
                 id: ids::SUBMESH_ANIM_MAP,
             })?;
         }
-        self.bone_mappings = data.data()?.convert()?;
+        let U32UsizeVec { value } = data.data()?.convert()?;
+        self.bone_mappings = value;
         Ok(())
     }
 }

@@ -2,13 +2,15 @@ use std::fmt;
 
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 pub use error::AloError;
 use petro_alo::AloFile;
+use petro_alo::mesh::VertexFormat;
 use petro_alo::skeleton::BillboardMode;
 
 mod error;
@@ -71,7 +73,7 @@ impl AssetLoader for AloLoader {
                 bone_builder.insert(ChildOf(bones[parent]));
             }
             bones.push(bone_builder.id());
-            inverse_bindposes.push(ALO_TO_BEVY * bone.local_to_global.inverse() * bevy_to_alo);
+            inverse_bindposes.push((ALO_TO_BEVY * bone.local_to_global * bevy_to_alo).inverse());
         }
 
         let mut meshes = Vec::with_capacity(file.meshes.len());
@@ -92,48 +94,49 @@ impl AssetLoader for AloLoader {
                 }
                 mesh_builder.id()
             };
-            for (submesh_idx, mut submesh) in mesh.submeshes.into_iter().enumerate() {
-                alo_to_bevy(&mut submesh.positions);
-                alo_to_bevy(&mut submesh.normals);
-                alo_to_bevy(&mut submesh.tangents);
-                alo_to_bevy(&mut submesh.binormals);
-
+            for (submesh_idx, submesh) in mesh.submeshes.into_iter().enumerate() {
                 let mut msh = Mesh::new(
                     PrimitiveTopology::TriangleList,
                     RenderAssetUsages::RENDER_WORLD,
                 );
                 msh.insert_indices(Indices::U16(cast_vec(submesh.primitives)));
-                msh.insert_attribute(Mesh::ATTRIBUTE_POSITION, submesh.positions);
-                match &*submesh.vertex_format {
-                    "alD3dVertN" => {
-                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, submesh.normals);
-                    }
-                    "alD3dVertNU2" => {
-                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, submesh.normals);
-                        let [uv0, uv1, _, _] = submesh.tex_coords;
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
-                    }
-                    "alD3dVertNU2C" => {
-                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, submesh.normals);
-                        let [uv0, uv1, _, _] = submesh.tex_coords;
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
-                        msh.insert_attribute(Mesh::ATTRIBUTE_COLOR, submesh.colors);
-                    }
-                    "alD3dVertNU2U3U3" => {
+                if submesh.vertex_format.contains(VertexFormat::Positions) {
+                    msh.insert_attribute(Mesh::ATTRIBUTE_POSITION, alo_to_bevy(submesh.positions));
+                }
+                if submesh
+                    .vertex_format
+                    .intersects(VertexFormat::Normals | VertexFormat::TangentBinormals)
+                {
+                    let normals = alo_to_bevy(submesh.normals);
+                    if submesh
+                        .vertex_format
+                        .contains(VertexFormat::TangentBinormals)
+                    {
                         let tangents = combine_tangents(
-                            &submesh.normals,
-                            &submesh.tangents,
-                            &submesh.binormals,
+                            &normals,
+                            &alo_to_bevy(submesh.tangents),
+                            &alo_to_bevy(submesh.binormals),
                         );
-                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, submesh.normals);
-                        let [uv0, uv1, _, _] = submesh.tex_coords;
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
-                        msh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
                         msh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
                     }
-                    _ => return Err(AloError::UnsupportedVertextFormat(submesh.vertex_format)),
+                    if submesh.vertex_format.contains(VertexFormat::Normals) {
+                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+                    }
+                }
+                if submesh.vertex_format.contains(VertexFormat::TexCoords) {
+                    let [uv0, uv1, _, _] = submesh.tex_coords;
+                    msh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
+                    msh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+                }
+                if submesh.vertex_format.contains(VertexFormat::Colors) {
+                    msh.insert_attribute(Mesh::ATTRIBUTE_COLOR, submesh.colors);
+                }
+                if submesh.vertex_format.contains(VertexFormat::Bones) {
+                    msh.insert_attribute(
+                        Mesh::ATTRIBUTE_JOINT_INDEX,
+                        VertexAttributeValues::Uint16x4(submesh.bone_indices),
+                    );
+                    msh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, submesh.bone_weights);
                 }
                 let msh = load_context.add_labeled_asset(
                     AloAssetLabel::Submesh {
@@ -154,12 +157,33 @@ impl AssetLoader for AloLoader {
                         ..Default::default()
                     },
                 );
-                world.spawn((
+                let mut submesh_builder = world.spawn((
                     Mesh3d(msh),
                     MeshMaterial3d(color),
-                    Visibility::Inherited,
                     ChildOf(mesh_id),
+                    Visibility::Inherited,
                 ));
+                if submesh.vertex_format.contains(VertexFormat::Bones) {
+                    let mut submesh_inverse_bindposes =
+                        Vec::with_capacity(submesh.bone_mappings.len());
+                    let mut joints = Vec::with_capacity(submesh.bone_mappings.len());
+                    for mapping in submesh.bone_mappings {
+                        submesh_inverse_bindposes.push(inverse_bindposes[mapping]);
+                        joints.push(bones[mapping]);
+                    }
+                    let inverse_bindposes = load_context.add_labeled_asset(
+                        AloAssetLabel::SubmeshInverseBindposes {
+                            mesh_idx,
+                            submesh_idx,
+                        }
+                        .to_string(),
+                        SkinnedMeshInverseBindposes::from(submesh_inverse_bindposes),
+                    );
+                    submesh_builder.insert(SkinnedMesh {
+                        inverse_bindposes,
+                        joints,
+                    });
+                }
             }
             meshes.push(mesh_id);
         }
@@ -174,12 +198,13 @@ impl AssetLoader for AloLoader {
 
 /// Transform a slice of ALO vectors to Bevy space. Since this transform does no translation, this
 /// works on both position vectors and direction vectors.
-fn alo_to_bevy(vals: &mut [[f32; 3]]) {
-    for point in vals {
+fn alo_to_bevy(mut vals: Vec<[f32; 3]>) -> Vec<[f32; 3]> {
+    for point in &mut vals {
         *point = ALO_TO_BEVY
             .transform_vector3(Vec3::from_array(*point))
             .to_array();
     }
+    vals
 }
 
 fn combine_tangents(norms: &[[f32; 3]], tans: &[[f32; 3]], binorms: &[[f32; 3]]) -> Vec<[f32; 4]> {
@@ -205,6 +230,7 @@ fn combine_tangent(norm: [f32; 3], tan: [f32; 3], binorm: [f32; 3]) -> [f32; 4] 
 pub enum AloAssetLabel {
     Submesh { mesh_idx: usize, submesh_idx: usize },
     SubmeshMaterial { mesh_idx: usize, submesh_idx: usize },
+    SubmeshInverseBindposes { mesh_idx: usize, submesh_idx: usize },
 }
 
 impl fmt::Display for AloAssetLabel {
@@ -221,6 +247,12 @@ impl fmt::Display for AloAssetLabel {
                 submesh_idx,
             } => {
                 write!(f, "Mesh{mesh_idx}Submesh{submesh_idx}Material")?;
+            }
+            Self::SubmeshInverseBindposes {
+                mesh_idx,
+                submesh_idx,
+            } => {
+                write!(f, "Mesh{mesh_idx}Submesh{submesh_idx}InverseBindposes")?;
             }
         }
         Ok(())
