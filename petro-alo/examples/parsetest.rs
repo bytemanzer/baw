@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use clap::Parser;
 use glam::Vec4Swizzles;
 use petro_alo::AloFile;
-use petro_alo::mesh::{Mesh, Submesh, VertexFormat};
+use petro_alo::mesh::{Mesh, Shader, ShaderParam, Submesh, VertexFormat};
 use petro_alo::skeleton::Bone;
 
 bitflags! {
@@ -40,14 +40,14 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let mut formats = BTreeMap::new();
-
-    for file in args.files {
+    let mut params = BTreeMap::new();
+    for file in &args.files {
         let content =
-            std::fs::read(&file).with_context(|| format!("parsing file {}", file.display()))?;
+            std::fs::read(file).with_context(|| format!("parsing file {}", file.display()))?;
         let alo =
             AloFile::parse(&content).with_context(|| format!("parsing file {}", file.display()))?;
         println!("{}:", file.display());
-        show_model(&alo, &mut formats, Indent::new(4));
+        show_model(&alo, &mut formats, &mut params, Indent::new(4));
     }
     println!("All discovered vertex formats:");
     for (format, fields) in formats {
@@ -56,18 +56,29 @@ fn main() -> anyhow::Result<()> {
             println!("    {fmt:?}");
         }
     }
+    println!("All discovered shader params");
+    for (name, formats) in params {
+        println!("    {name}: {formats:?}");
+    }
     Ok(())
 }
 
 fn show_model(
     model: &AloFile,
     formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
+    params: &mut BTreeMap<String, BTreeSet<&'static str>>,
     indent: Indent,
 ) {
     println!("{indent}Skeleton:");
     show_bones(&model.skeleton.bones, None, indent.bump());
     println!("{indent}Meshes:");
-    show_meshes(&model.meshes, &model.skeleton.bones, formats, indent.bump());
+    show_meshes(
+        &model.meshes,
+        &model.skeleton.bones,
+        formats,
+        params,
+        indent.bump(),
+    );
 }
 
 fn show_bones(bones: &[Bone], parent: Option<usize>, indent: Indent) {
@@ -89,6 +100,7 @@ fn show_meshes(
     meshes: &[Mesh],
     bones: &[Bone],
     formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
+    params: &mut BTreeMap<String, BTreeSet<&'static str>>,
     indent: Indent,
 ) {
     for mesh in meshes {
@@ -103,17 +115,38 @@ fn show_meshes(
             Some(bidx) => println!(" [{}]", bones[bidx].name),
             None => println!(),
         }
+        let indent = indent.bump();
         for (idx, submesh) in mesh.submeshes.iter().enumerate() {
-            let indent = indent.bump();
             println!(
                 "{indent}Submesh {idx: >2}: vertfmt={:?}",
                 submesh.vertex_format
             );
+            show_shader_params(&submesh.shader, params, indent.bump());
             formats
                 .entry(submesh.vertex_format_string.clone())
                 .or_default()
                 .insert(find_used_vertex_values(submesh));
         }
+    }
+}
+
+fn show_shader_params(
+    shader: &Shader,
+    params: &mut BTreeMap<String, BTreeSet<&'static str>>,
+    indent: Indent,
+) {
+    println!("{indent}Shader {}", shader.filename);
+    let indent = indent.bump();
+    for (name, value) in &shader.params {
+        println!("{indent}{}: {:?}", name, value);
+        let ty = match value {
+            ShaderParam::Int(_) => "Int",
+            ShaderParam::Float(_) => "Float",
+            ShaderParam::Float3(_) => "Float3",
+            ShaderParam::Texture(_) => "Texture",
+            ShaderParam::Float4(_) => "Float4",
+        };
+        params.entry(name.clone()).or_default().insert(ty);
     }
 }
 

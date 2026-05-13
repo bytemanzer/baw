@@ -4,6 +4,7 @@ use std::path::Path;
 pub mod file;
 pub mod meg;
 pub mod models;
+pub mod textures;
 
 /// Represents a file within the game, possibly independent, possibly packed in a MEGA file.
 pub trait Asset {

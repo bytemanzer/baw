@@ -41,6 +41,8 @@ pub enum FormatError {
     MultiParentMesh { mesh_idx: usize },
     #[error("Vertex format {format:?} not recognized")]
     UnknownVertexFormat { format: String },
+    #[error("Shader param {name} specified more than once")]
+    DuplicateShaderParam { name: String },
 }
 
 impl From<FormatError> for ChunkError {

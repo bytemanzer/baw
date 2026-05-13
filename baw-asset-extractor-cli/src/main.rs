@@ -5,6 +5,7 @@ use baw_asset_extractor::AssetFinder;
 use baw_asset_extractor::file::FileAssetFinder;
 use baw_asset_extractor::meg::MegAssetFinder;
 use baw_asset_extractor::models::ModelVisitor;
+use baw_asset_extractor::textures::TextureVisitor;
 use clap::Parser;
 
 /// Extracts content from Empire at War that is needed for `baw` game.
@@ -32,9 +33,10 @@ fn main() {
     dest.push(&args.prefix);
 
     let finder = FileAssetFinder::new(&args.src).chain(MegAssetFinder::new(&args.src));
-    let mut models = ModelVisitor::new(&dest);
+    let models = ModelVisitor::new(&dest);
+    let textures = TextureVisitor::new(&dest);
 
-    if let Err(e) = finder.find_assets(&mut models) {
+    if let Err(e) = finder.find_assets(&mut (models, textures)) {
         eprintln!("Error processing game assets: {e}");
         exit(1);
     }

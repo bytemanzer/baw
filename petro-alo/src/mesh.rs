@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -181,6 +182,8 @@ impl FromStr for VertexFormat {
 /// Holds properties of a SubMesh.
 #[derive(Debug)]
 pub struct Submesh {
+    /// Shader to use for this mesh.
+    pub shader: Shader,
     /// Vertex format of this submesh. Determines which of the vertex buffers should actually be
     /// used.
     ///
@@ -209,6 +212,9 @@ pub struct Submesh {
 impl Submesh {
     /// Parse a Submesh from the materials and data chunks.
     fn parse(materials: ChunkContent, data: ChunkContent) -> anyhow::Result<Self> {
+        let shader =
+            Shader::parse(materials).context("parsing the submesh material information")?;
+
         let mut data = data.children()?;
 
         #[derive(Error, Debug, Copy, Clone)]
@@ -243,6 +249,7 @@ impl Submesh {
         let vertex_format = vertex_format_string.parse().context(VertexFmtCtx)?;
 
         let mut submesh = Submesh {
+            shader,
             vertex_format_string,
             vertex_format,
             primitives: Vec::new(),
@@ -495,4 +502,94 @@ fn squash_bone_idx(idx: impl Into<u32>, weight: f32, index_count: u16) -> anyhow
     } else {
         Ok(idx as u16)
     }
+}
+
+/// Submesh shader configuration.
+#[derive(Debug, Clone)]
+pub struct Shader {
+    /// Name of the shader file.
+    pub filename: String,
+    /// Shader parameters for this submesh's shader.
+    pub params: HashMap<String, ShaderParam>,
+}
+
+impl Shader {
+    fn parse(materials: ChunkContent) -> anyhow::Result<Self> {
+        let mut materials = materials.children()?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the submesh material shader name (chunk 00010101)")]
+        struct ShaderNameCtx;
+        let filename: String = materials
+            .expect_chunk(ids::SUBMESH_MATERIAL_SHADER_NAME)
+            .context(ShaderNameCtx)?
+            .data()
+            .context(ShaderNameCtx)?
+            .convert()
+            .context(ShaderNameCtx)?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("parsing the submesh material parameter in chunk {id:0>8x}")]
+        struct ShaderParamCtx {
+            id: u32,
+        }
+
+        let mut params = HashMap::new();
+        while let Some(chunk) = materials
+            .try_expect_chunk([
+                ids::SUBMESH_MATERIAL_INT_PARAM,
+                ids::SUBMESH_MATERIAL_FLOAT_PARAM,
+                ids::SUBMESH_MATERIAL_FLOAT3_PARAM,
+                ids::SUBMESH_MATERIAL_TEX_PARAM,
+                ids::SUBMESH_MATERIAL_FLOAT4_PARAM,
+            ])
+            .context("reading shader params")?
+        {
+            let ctx = ShaderParamCtx { id: chunk.id() };
+            let mut content = chunk.data().context(ctx)?.as_mini_chunks();
+            let name = content
+                .expect_chunk(ids::SUBMESH_MATERIAL_PARAM_NAME)
+                .context(ctx)?
+                .convert()
+                .context(ctx)?;
+            if params.contains_key(&name) {
+                return Err(FormatError::DuplicateShaderParam { name }).context(ctx)?;
+            }
+            let value = content
+                .expect_chunk(ids::SUBMESH_MATERIAL_PARAM_VALUE)
+                .context(ctx)?;
+            let value = match chunk.id() {
+                ids::SUBMESH_MATERIAL_INT_PARAM => ShaderParam::Int(value.convert().context(ctx)?),
+                ids::SUBMESH_MATERIAL_FLOAT_PARAM => {
+                    ShaderParam::Float(value.convert().context(ctx)?)
+                }
+                ids::SUBMESH_MATERIAL_FLOAT3_PARAM => {
+                    ShaderParam::Float3(value.convert().context(ctx)?)
+                }
+                ids::SUBMESH_MATERIAL_TEX_PARAM => {
+                    ShaderParam::Texture(value.convert().context(ctx)?)
+                }
+                ids::SUBMESH_MATERIAL_FLOAT4_PARAM => {
+                    ShaderParam::Float4(value.convert().context(ctx)?)
+                }
+                _ => unreachable!(),
+            };
+            params.insert(name, value);
+        }
+        materials
+            .expect_empty()
+            .context("after reading shader parameters")?;
+
+        Ok(Self { filename, params })
+    }
+}
+
+/// A value passed to an ALO shader.
+#[derive(Debug, Clone)]
+pub enum ShaderParam {
+    Int(i32),
+    Float(f32),
+    Float3([f32; 3]),
+    Texture(String),
+    Float4([f32; 4]),
 }

@@ -1,17 +1,22 @@
 use std::fmt;
+use std::path::PathBuf;
+
+use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::prelude::*;
 
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use bevy::prelude::*;
-
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
-pub use error::AloError;
 use petro_alo::AloFile;
-use petro_alo::mesh::VertexFormat;
+use petro_alo::mesh::{Shader as AloShader, ShaderParam, VertexFormat};
 use petro_alo::skeleton::BillboardMode;
+
+pub use error::AloError;
 
 mod error;
 
@@ -22,7 +27,11 @@ impl Plugin for AloPlugin {
     fn build(&self, app: &mut App) {
         app.register_asset_loader(AloLoader)
             .register_type::<AloBone>()
-            .register_type::<AloBillboard>();
+            .register_type::<AloBillboard>()
+            .register_type::<DebugUv>()
+            .register_type::<MeshMaterial3d<DebugUv>>()
+            .init_asset::<DebugUv>()
+            .add_plugins(MaterialPlugin::<DebugUv>::default());
     }
 }
 
@@ -138,31 +147,28 @@ impl AssetLoader for AloLoader {
                     );
                     msh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, submesh.bone_weights);
                 }
-                if mesh.collision_enabled {
-                    // TODO
-                } else {
-                    let msh = load_context.add_labeled_asset(
-                        AloAssetLabel::Submesh {
-                            mesh_idx,
-                            submesh_idx,
-                        }
-                        .to_string(),
-                        msh,
-                    );
-                    let color = load_context.add_labeled_asset(
+
+                let msh = load_context.add_labeled_asset(
+                    AloAssetLabel::Submesh {
+                        mesh_idx,
+                        submesh_idx,
+                    }
+                    .to_string(),
+                    msh,
+                );
+                if let Some(material) = build_submesh_material(submesh.shader, load_context)? {
+                    // Build an entity with a visible mesh if a material exists for it.
+                    let material = load_context.add_labeled_asset(
                         AloAssetLabel::SubmeshMaterial {
                             mesh_idx,
                             submesh_idx,
                         }
                         .to_string(),
-                        StandardMaterial {
-                            base_color: Srgba::WHITE.into(),
-                            ..Default::default()
-                        },
+                        material,
                     );
                     let mut submesh_builder = world.spawn((
                         Mesh3d(msh),
-                        MeshMaterial3d(color),
+                        MeshMaterial3d(material),
                         Transform::IDENTITY,
                         ChildOf(mesh_id),
                         Visibility::Inherited,
@@ -228,6 +234,81 @@ fn combine_tangent(norm: [f32; 3], tan: [f32; 3], binorm: [f32; 3]) -> [f32; 4] 
         .dot(Vec3::from_array(binorm))
         .signum();
     [tan[0], tan[1], tan[2], w]
+}
+
+macro_rules! expect_shader_param {
+    ($shader:ident, $name:literal, $ty:ident) => {
+        match $shader.params.remove($name) {
+            Some(ShaderParam::$ty(value)) => Some(value),
+            Some(other) => {
+                return Err(AloError::UnexpectedShaderValueType {
+                    param: $name,
+                    value: other,
+                    expected: stringify!($ty),
+                })
+            }
+            None => None,
+        }
+    };
+}
+
+/// Convert an ALO shader to a Bevy material (within reason).
+fn build_submesh_material(
+    mut shader: AloShader,
+    load_context: &mut LoadContext<'_>,
+) -> Result<Option<StandardMaterial>, AloError> {
+    let mut material = StandardMaterial::default();
+
+    match &*shader.filename {
+        "MeshCollision.fx" | "MeshShadowVolume.fx" => return Ok(None),
+        "MeshAdditive.fx" => material.alpha_mode = AlphaMode::Add,
+        "MeshAlpha.fx" => material.alpha_mode = AlphaMode::Blend,
+        _ => {}
+    }
+    if let Some(color) = expect_shader_param!(shader, "Color", Float4) {
+        material.base_color = Srgba::from_f32_array(color).into()
+    }
+    if let Some([r, g, b, diffuse]) = expect_shader_param!(shader, "Diffuse", Float4) {
+        material.base_color = Srgba::from_f32_array_no_alpha([r, g, b]).into();
+        material.diffuse_transmission = diffuse;
+    }
+    if let Some(color) = expect_shader_param!(shader, "DiffuseColor", Float3) {
+        material.base_color = Srgba::from_f32_array_no_alpha(color).into();
+    }
+    if let Some(mut tex) = expect_shader_param!(shader, "BaseTexture", Texture) {
+        let mut path = PathBuf::from("extracted");
+        path.push("textures");
+        tex.make_ascii_lowercase();
+        path.push(tex);
+        path.set_extension("dds");
+        let tex = load_context
+            .loader()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
+                settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    ..ImageSamplerDescriptor::linear()
+                });
+            })
+            .load(path);
+        material.base_color_texture = Some(tex);
+    }
+    Ok(Some(material))
+}
+
+#[derive(AsBindGroup, Reflect, Debug, Clone, Asset)]
+pub struct DebugUv {}
+
+impl Material for DebugUv {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/uv.wgsl".into()
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
 }
 
 /// Label for sub-assets of an ALO model.
