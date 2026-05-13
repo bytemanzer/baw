@@ -138,51 +138,56 @@ impl AssetLoader for AloLoader {
                     );
                     msh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, submesh.bone_weights);
                 }
-                let msh = load_context.add_labeled_asset(
-                    AloAssetLabel::Submesh {
-                        mesh_idx,
-                        submesh_idx,
-                    }
-                    .to_string(),
-                    msh,
-                );
-                let color = load_context.add_labeled_asset(
-                    AloAssetLabel::SubmeshMaterial {
-                        mesh_idx,
-                        submesh_idx,
-                    }
-                    .to_string(),
-                    StandardMaterial {
-                        base_color: Srgba::WHITE.into(),
-                        ..Default::default()
-                    },
-                );
-                let mut submesh_builder = world.spawn((
-                    Mesh3d(msh),
-                    MeshMaterial3d(color),
-                    ChildOf(mesh_id),
-                    Visibility::Inherited,
-                ));
-                if submesh.vertex_format.contains(VertexFormat::Bones) {
-                    let mut submesh_inverse_bindposes =
-                        Vec::with_capacity(submesh.bone_mappings.len());
-                    let mut joints = Vec::with_capacity(submesh.bone_mappings.len());
-                    for mapping in submesh.bone_mappings {
-                        submesh_inverse_bindposes.push(inverse_bindposes[mapping]);
-                        joints.push(bones[mapping]);
-                    }
-                    let inverse_bindposes = load_context.add_labeled_asset(
-                        AloAssetLabel::SubmeshInverseBindposes {
+                if mesh.collision_enabled {
+                    // TODO
+                } else {
+                    let msh = load_context.add_labeled_asset(
+                        AloAssetLabel::Submesh {
                             mesh_idx,
                             submesh_idx,
                         }
                         .to_string(),
-                        SkinnedMeshInverseBindposes::from(submesh_inverse_bindposes),
+                        msh,
                     );
-                    submesh_builder.insert(SkinnedMesh {
-                        inverse_bindposes,
-                        joints,
-                    });
+                    let color = load_context.add_labeled_asset(
+                        AloAssetLabel::SubmeshMaterial {
+                            mesh_idx,
+                            submesh_idx,
+                        }
+                        .to_string(),
+                        StandardMaterial {
+                            base_color: Srgba::WHITE.into(),
+                            ..Default::default()
+                        },
+                    );
+                    let mut submesh_builder = world.spawn((
+                        Mesh3d(msh),
+                        MeshMaterial3d(color),
+                        Transform::IDENTITY,
+                        ChildOf(mesh_id),
+                        Visibility::Inherited,
+                    ));
+                    if submesh.vertex_format.contains(VertexFormat::Bones) {
+                        let mut submesh_inverse_bindposes =
+                            Vec::with_capacity(submesh.bone_mappings.len());
+                        let mut joints = Vec::with_capacity(submesh.bone_mappings.len());
+                        for mapping in submesh.bone_mappings {
+                            submesh_inverse_bindposes.push(inverse_bindposes[mapping]);
+                            joints.push(bones[mapping]);
+                        }
+                        let inverse_bindposes = load_context.add_labeled_asset(
+                            AloAssetLabel::SubmeshInverseBindposes {
+                                mesh_idx,
+                                submesh_idx,
+                            }
+                            .to_string(),
+                            SkinnedMeshInverseBindposes::from(submesh_inverse_bindposes),
+                        );
+                        submesh_builder.insert(SkinnedMesh {
+                            inverse_bindposes,
+                            joints,
+                        });
+                    }
                 }
             }
             meshes.push(mesh_id);

@@ -93,6 +93,12 @@ fn show_meshes(
 ) {
     for mesh in meshes {
         print!("{indent}{}:", mesh.name);
+        if mesh.hidden {
+            print!(" Hidden");
+        }
+        if mesh.collision_enabled {
+            print!(" Collider");
+        }
         match mesh.parent_bone {
             Some(bidx) => println!(" [{}]", bones[bidx].name),
             None => println!(),

@@ -27,6 +27,8 @@ pub struct Mesh {
     pub bounds: BoundingBox,
     /// Whether the mesh is (initially) hidden.
     pub hidden: bool,
+    /// Whether this mesh is used for collision.
+    pub collision_enabled: bool,
     pub submeshes: Vec<Submesh>,
     /// Bone to attach this mesh to.
     pub parent_bone: Option<usize>,
@@ -101,6 +103,7 @@ impl Mesh {
             name,
             bounds,
             hidden,
+            collision_enabled,
             submeshes,
             parent_bone: None,
         })

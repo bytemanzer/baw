@@ -9,6 +9,6 @@ pub enum AloError {
     AloFile(#[from] petro_alo::AloError),
     #[error("Error reading ALO file: {0}")]
     Io(#[from] io::Error),
-    #[error("Vertex format {0:?} is not supported")]
-    UnsupportedVertextFormat(String),
+    #[error("Unable to create a collider from a collision mesh")]
+    ConvexDecompositionFailed,
 }
