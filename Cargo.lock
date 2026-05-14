@@ -431,6 +431,7 @@ name = "bevy-alo"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bitflags 2.11.1",
  "bytemuck",
  "petro-alo",
  "thiserror 2.0.18",

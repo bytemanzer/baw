@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let mut formats = BTreeMap::new();
+    let mut shaders = BTreeMap::new();
     let mut params = BTreeMap::new();
     for file in &args.files {
         let content =
@@ -47,7 +48,13 @@ fn main() -> anyhow::Result<()> {
         let alo =
             AloFile::parse(&content).with_context(|| format!("parsing file {}", file.display()))?;
         println!("{}:", file.display());
-        show_model(&alo, &mut formats, &mut params, Indent::new(4));
+        show_model(
+            &alo,
+            &mut formats,
+            &mut shaders,
+            &mut params,
+            Indent::new(4),
+        );
     }
     println!("All discovered vertex formats:");
     for (format, fields) in formats {
@@ -55,6 +62,10 @@ fn main() -> anyhow::Result<()> {
         for fmt in fields {
             println!("    {fmt:?}");
         }
+    }
+    println!("All discovered shaders");
+    for (name, params) in shaders {
+        println!("    {name}: {params:?}");
     }
     println!("All discovered shader params");
     for (name, formats) in params {
@@ -66,6 +77,7 @@ fn main() -> anyhow::Result<()> {
 fn show_model(
     model: &AloFile,
     formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
+    shaders: &mut BTreeMap<String, BTreeSet<String>>,
     params: &mut BTreeMap<String, BTreeSet<&'static str>>,
     indent: Indent,
 ) {
@@ -76,6 +88,7 @@ fn show_model(
         &model.meshes,
         &model.skeleton.bones,
         formats,
+        shaders,
         params,
         indent.bump(),
     );
@@ -100,6 +113,7 @@ fn show_meshes(
     meshes: &[Mesh],
     bones: &[Bone],
     formats: &mut BTreeMap<String, BTreeSet<VertexFields>>,
+    shaders: &mut BTreeMap<String, BTreeSet<String>>,
     params: &mut BTreeMap<String, BTreeSet<&'static str>>,
     indent: Indent,
 ) {
@@ -121,7 +135,7 @@ fn show_meshes(
                 "{indent}Submesh {idx: >2}: vertfmt={:?}",
                 submesh.vertex_format
             );
-            show_shader_params(&submesh.shader, params, indent.bump());
+            show_shader_params(&submesh.shader, shaders, params, indent.bump());
             formats
                 .entry(submesh.vertex_format_string.clone())
                 .or_default()
@@ -132,10 +146,12 @@ fn show_meshes(
 
 fn show_shader_params(
     shader: &Shader,
+    shaders: &mut BTreeMap<String, BTreeSet<String>>,
     params: &mut BTreeMap<String, BTreeSet<&'static str>>,
     indent: Indent,
 ) {
     println!("{indent}Shader {}", shader.filename);
+    let shader_param_set = shaders.entry(shader.filename.clone()).or_default();
     let indent = indent.bump();
     for (name, value) in &shader.params {
         println!("{indent}{}: {:?}", name, value);
@@ -146,6 +162,7 @@ fn show_shader_params(
             ShaderParam::Texture(_) => "Texture",
             ShaderParam::Float4(_) => "Float4",
         };
+        shader_param_set.insert(name.clone());
         params.entry(name.clone()).or_default().insert(ty);
     }
 }

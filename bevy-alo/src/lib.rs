@@ -1,15 +1,14 @@
-use std::fmt;
 use std::path::PathBuf;
 
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
-use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use bevy::render::render_resource::AsBindGroup;
-use bevy::shader::ShaderRef;
+use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
+use bevy::render::storage::ShaderStorageBuffer;
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 use petro_alo::AloFile;
@@ -18,26 +17,34 @@ use petro_alo::skeleton::BillboardMode;
 
 pub use error::AloError;
 
+use crate::components::{AloBillboard, AloBone, AloComponentsPlugin, AloMesh};
+use crate::labels::AloAssetLabel;
+use crate::materials::{AloMaterial, AloMaterialExtension, AloMaterialsPlugin};
+
+pub mod components;
 mod error;
+pub mod labels;
+pub mod materials;
 
 /// Plugin which adds the ALO asset loader.
 pub struct AloPlugin;
 
 impl Plugin for AloPlugin {
     fn build(&self, app: &mut App) {
-        app.register_asset_loader(AloLoader)
-            .register_type::<AloBone>()
-            .register_type::<AloBillboard>()
-            .register_type::<DebugUv>()
-            .register_type::<MeshMaterial3d<DebugUv>>()
-            .init_asset::<DebugUv>()
-            .add_plugins(MaterialPlugin::<DebugUv>::default());
+        let team_colors =
+            app.world_mut()
+                .add_asset(ShaderStorageBuffer::from(vec![[1.0, 0.0, 1.0, 0.0]; 32]));
+        app.add_plugins((AloMaterialsPlugin, AloComponentsPlugin));
+        app.register_asset_loader(AloLoader { team_colors });
     }
 }
 
 /// Loads ALO Models.
 #[derive(Default, TypePath)]
-pub struct AloLoader;
+pub struct AloLoader {
+    /// Handle to the shader storage buffer containing the team colors.
+    team_colors: Handle<ShaderStorageBuffer>,
+}
 
 const ALO_TO_BEVY: Mat4 =
     Mat4::from_cols(Vec4::X, Vec4::new(0.0, 0.0, -1.0, 0.0), Vec4::Y, Vec4::W);
@@ -156,19 +163,20 @@ impl AssetLoader for AloLoader {
                     .to_string(),
                     msh,
                 );
-                if let Some(material) = build_submesh_material(submesh.shader, load_context)? {
-                    // Build an entity with a visible mesh if a material exists for it.
-                    let material = load_context.add_labeled_asset(
-                        AloAssetLabel::SubmeshMaterial {
-                            mesh_idx,
-                            submesh_idx,
-                        }
-                        .to_string(),
-                        material,
-                    );
+                // Build an entity with a visible mesh if a material exists for it.
+                if let Some(material) =
+                    build_submesh_material(submesh.shader, self.team_colors.clone(), load_context)?
+                {
+                    let material_label = AloAssetLabel::SubmeshMaterial {
+                        mesh_idx,
+                        submesh_idx,
+                    };
+                    let material =
+                        load_context.add_labeled_asset(material_label.to_string(), material);
                     let mut submesh_builder = world.spawn((
                         Mesh3d(msh),
                         MeshMaterial3d(material),
+                        MeshTag(0),
                         Transform::IDENTITY,
                         ChildOf(mesh_id),
                         Visibility::Inherited,
@@ -255,25 +263,37 @@ macro_rules! expect_shader_param {
 /// Convert an ALO shader to a Bevy material (within reason).
 fn build_submesh_material(
     mut shader: AloShader,
+    team_colors: Handle<ShaderStorageBuffer>,
     load_context: &mut LoadContext<'_>,
-) -> Result<Option<StandardMaterial>, AloError> {
-    let mut material = StandardMaterial::default();
+) -> Result<Option<AloMaterial>, AloError> {
+    let mut base = StandardMaterial::default();
+    let mut extension = AloMaterialExtension::new(team_colors);
 
     match &*shader.filename {
-        "MeshCollision.fx" | "MeshShadowVolume.fx" => return Ok(None),
-        "MeshAdditive.fx" => material.alpha_mode = AlphaMode::Add,
-        "MeshAlpha.fx" => material.alpha_mode = AlphaMode::Blend,
+        "MeshCollision.fx" | "MeshShadowVolume.fx" | "RSkinShadowVolume.fx" => return Ok(None),
+        "MeshAdditive.fx" => base.alpha_mode = AlphaMode::Add,
+        "MeshAlpha.fx" => base.alpha_mode = AlphaMode::Blend,
+        "MeshBumpColorize.fx"
+        | "MeshGlossColorize.fx"
+        | "RSkinAlphaGloss.fx"
+        | "RSkinBumpColorize.fx"
+        | "RSkinGlossColorize.fx" => {
+            extension.default_team_color = Some(LinearRgba::WHITE);
+        }
         _ => {}
     }
     if let Some(color) = expect_shader_param!(shader, "Color", Float4) {
-        material.base_color = Srgba::from_f32_array(color).into()
+        base.base_color = Srgba::from_f32_array(color).into()
+    }
+    if let Some(color) = expect_shader_param!(shader, "Colorization", Float4) {
+        extension.default_team_color = Some(Srgba::from_f32_array(color).into());
     }
     if let Some([r, g, b, diffuse]) = expect_shader_param!(shader, "Diffuse", Float4) {
-        material.base_color = Srgba::from_f32_array_no_alpha([r, g, b]).into();
-        material.diffuse_transmission = diffuse;
+        base.base_color = Srgba::from_f32_array_no_alpha([r, g, b]).into();
+        base.diffuse_transmission = diffuse;
     }
     if let Some(color) = expect_shader_param!(shader, "DiffuseColor", Float3) {
-        material.base_color = Srgba::from_f32_array_no_alpha(color).into();
+        base.base_color = Srgba::from_f32_array_no_alpha(color).into();
     }
     if let Some(mut tex) = expect_shader_param!(shader, "BaseTexture", Texture) {
         let mut path = PathBuf::from("extracted");
@@ -291,71 +311,8 @@ fn build_submesh_material(
                 });
             })
             .load(path);
-        material.base_color_texture = Some(tex);
+        base.base_color_texture = Some(tex);
     }
-    Ok(Some(material))
+
+    Ok(Some(ExtendedMaterial { base, extension }))
 }
-
-#[derive(AsBindGroup, Reflect, Debug, Clone, Asset)]
-pub struct DebugUv {}
-
-impl Material for DebugUv {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/uv.wgsl".into()
-    }
-    fn enable_prepass() -> bool {
-        false
-    }
-    fn enable_shadows() -> bool {
-        false
-    }
-}
-
-/// Label for sub-assets of an ALO model.
-#[derive(Clone, Debug)]
-pub enum AloAssetLabel {
-    Submesh { mesh_idx: usize, submesh_idx: usize },
-    SubmeshMaterial { mesh_idx: usize, submesh_idx: usize },
-    SubmeshInverseBindposes { mesh_idx: usize, submesh_idx: usize },
-}
-
-impl fmt::Display for AloAssetLabel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Submesh {
-                mesh_idx,
-                submesh_idx,
-            } => {
-                write!(f, "Mesh{mesh_idx}Submesh{submesh_idx}")?;
-            }
-            Self::SubmeshMaterial {
-                mesh_idx,
-                submesh_idx,
-            } => {
-                write!(f, "Mesh{mesh_idx}Submesh{submesh_idx}Material")?;
-            }
-            Self::SubmeshInverseBindposes {
-                mesh_idx,
-                submesh_idx,
-            } => {
-                write!(f, "Mesh{mesh_idx}Submesh{submesh_idx}InverseBindposes")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Marker component for entities that are the bones of an Alo skeleton.
-#[derive(Component, Reflect)]
-#[reflect(Component)]
-pub struct AloBone;
-
-/// Holds the [`BillboardMode`] of an ALO bone.
-#[derive(Component, Reflect, Clone)]
-#[reflect(opaque)]
-pub struct AloBillboard(pub BillboardMode);
-
-/// Marker component for entities that are the "meshes" of an Alo file.
-#[derive(Component, Reflect)]
-#[reflect(Component)]
-pub struct AloMesh;
