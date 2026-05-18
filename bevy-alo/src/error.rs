@@ -21,4 +21,8 @@ pub enum AloError {
         value: ShaderParam,
         expected: &'static str,
     },
+    #[error("Invalid LOD number: {0}")]
+    InvalidLodNumber(String),
+    #[error("Level of Detail {num} appeared more than once for name {basename}")]
+    DuplicateLod { num: u32, basename: String }
 }

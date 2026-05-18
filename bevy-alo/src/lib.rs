@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
@@ -12,10 +15,11 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 use petro_alo::AloFile;
-use petro_alo::mesh::{Shader as AloShader, ShaderParam, VertexFormat};
+use petro_alo::mesh::{Mesh as RawAloMesh, Shader as AloShader, ShaderParam, VertexFormat};
 use petro_alo::skeleton::BillboardMode;
 
 pub use error::AloError;
+use regex::Regex;
 
 use crate::components::{AloBillboard, AloBone, AloComponentsPlugin, AloMesh};
 use crate::labels::AloAssetLabel;
@@ -92,8 +96,11 @@ impl AssetLoader for AloLoader {
             inverse_bindposes.push((ALO_TO_BEVY * bone.local_to_global * bevy_to_alo).inverse());
         }
 
+        let mut lods = compute_lods(&file.meshes)?;
         let mut meshes = Vec::with_capacity(file.meshes.len());
         for (mesh_idx, mesh) in file.meshes.into_iter().enumerate() {
+            println!("{}", mesh.name);
+            let lod = lods.remove(&mesh.name);
             let mesh_id = {
                 let mut mesh_builder = world.spawn((
                     AloMesh,
@@ -115,6 +122,7 @@ impl AssetLoader for AloLoader {
                     PrimitiveTopology::TriangleList,
                     RenderAssetUsages::RENDER_WORLD,
                 );
+                println!("    {:?}", submesh.vertex_format);
                 msh.insert_indices(Indices::U16(cast_vec(submesh.primitives)));
                 if submesh.vertex_format.contains(VertexFormat::Positions) {
                     msh.insert_attribute(Mesh::ATTRIBUTE_POSITION, alo_to_bevy(submesh.positions));
@@ -181,6 +189,9 @@ impl AssetLoader for AloLoader {
                         ChildOf(mesh_id),
                         Visibility::Inherited,
                     ));
+                    if let Some(ref lod) = lod {
+                        submesh_builder.insert(lod.clone());
+                    }
                     if submesh.vertex_format.contains(VertexFormat::Bones) {
                         let mut submesh_inverse_bindposes =
                             Vec::with_capacity(submesh.bone_mappings.len());
@@ -268,51 +279,157 @@ fn build_submesh_material(
 ) -> Result<Option<AloMaterial>, AloError> {
     let mut base = StandardMaterial::default();
     let mut extension = AloMaterialExtension::new(team_colors);
-
+    println!("    {}", shader.filename);
+    for (name, param) in &shader.params {
+        println!("        {name} {param:?}");
+    }
     match &*shader.filename {
         "MeshCollision.fx" | "MeshShadowVolume.fx" | "RSkinShadowVolume.fx" => return Ok(None),
-        "MeshAdditive.fx" => base.alpha_mode = AlphaMode::Add,
-        "MeshAlpha.fx" => base.alpha_mode = AlphaMode::Blend,
+        "MeshAlpha.fx" => {
+            base.alpha_mode = AlphaMode::Blend;
+        }
+        "MeshAdditive.fx" | "MeshAdditiveVColor.fx" => {
+            base.alpha_mode = AlphaMode::Add;
+            base.unlit = true;
+        }
+        "Nebula.fx" => {
+            base.alpha_mode = AlphaMode::Add;
+            base.unlit = true;
+            base.cull_mode = None;
+        }
         "MeshBumpColorize.fx"
         | "MeshGlossColorize.fx"
-        | "RSkinAlphaGloss.fx"
         | "RSkinBumpColorize.fx"
         | "RSkinGlossColorize.fx" => {
             extension.default_team_color = Some(LinearRgba::WHITE);
         }
+        "RSkinAlphaGloss.fx" => {
+            base.alpha_mode = AlphaMode::Blend;
+            extension.default_team_color = Some(LinearRgba::WHITE);
+        }
         _ => {}
     }
+    // Treat things as rough unless they use Gloss.
+    base.perceptual_roughness = 1.0;
     if let Some(color) = expect_shader_param!(shader, "Color", Float4) {
         base.base_color = Srgba::from_f32_array(color).into()
     }
     if let Some(color) = expect_shader_param!(shader, "Colorization", Float4) {
         extension.default_team_color = Some(Srgba::from_f32_array(color).into());
     }
-    if let Some([r, g, b, diffuse]) = expect_shader_param!(shader, "Diffuse", Float4) {
-        base.base_color = Srgba::from_f32_array_no_alpha([r, g, b]).into();
-        base.diffuse_transmission = diffuse;
+    if let Some(color) = expect_shader_param!(shader, "Diffuse", Float4) {
+        let mut color = Srgba::from_f32_array(color);
+        // When using team colorization we need to prevent overriding the texture map's alpha or
+        // else no team coloring will occur.
+        if extension.default_team_color.is_some() {
+            color.alpha = 1.0;
+        }
+        base.base_color = color.into();
+    }
+    if let Some(shininess) = expect_shader_param!(shader, "Shininess", Float) {
+        // To go from shininess (exponent) to roughness, we invert and square root (apparently?).
+        extension.min_linear_roughness = Some((2.0 / (shininess + 2.0)).sqrt());
     }
     if let Some(color) = expect_shader_param!(shader, "DiffuseColor", Float3) {
         base.base_color = Srgba::from_f32_array_no_alpha(color).into();
     }
-    if let Some(mut tex) = expect_shader_param!(shader, "BaseTexture", Texture) {
-        let mut path = PathBuf::from("extracted");
-        path.push("textures");
-        tex.make_ascii_lowercase();
-        path.push(tex);
-        path.set_extension("dds");
-        let tex = load_context
-            .loader()
-            .with_settings(|settings: &mut ImageLoaderSettings| {
-                settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                    address_mode_u: ImageAddressMode::Repeat,
-                    address_mode_v: ImageAddressMode::Repeat,
-                    ..ImageSamplerDescriptor::linear()
-                });
-            })
-            .load(path);
+    if let Some(tex) = expect_shader_param!(shader, "BaseTexture", Texture) {
+        let tex = load_alo_texture(load_context, tex, true);
         base.base_color_texture = Some(tex);
+    }
+    if let Some(tex) = expect_shader_param!(shader, "NormalTexture", Texture) {
+        let tex = load_alo_texture(load_context, tex, false);
+        base.normal_map_texture = Some(tex);
+    }
+    if let Some(tex) = expect_shader_param!(shader, "GlossTexture", Texture) {
+        let tex = load_alo_texture(load_context, tex, false);
+        extension.gloss_texture = Some(tex);
     }
 
     Ok(Some(ExtendedMaterial { base, extension }))
+}
+
+fn load_alo_texture(
+    load_context: &mut LoadContext<'_>,
+    mut tex_name: String,
+    is_srgb: bool,
+) -> Handle<Image> {
+    let mut path = PathBuf::from("extracted");
+    path.push("textures");
+    tex_name.make_ascii_lowercase();
+    path.push(tex_name);
+    path.set_extension("dds");
+    load_context
+        .loader()
+        .with_settings(move |settings: &mut ImageLoaderSettings| {
+            settings.is_srgb = is_srgb;
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            });
+        })
+        .load(path)
+}
+
+/// Compute level of detail ranges for the given mesh.
+fn compute_lods(meshes: &[RawAloMesh]) -> Result<HashMap<String, VisibilityRange>, AloError> {
+    static LOD_FINDER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(.*)LOD([0-9]+)$").unwrap());
+
+    let mut lod_stack = HashMap::<&str, Vec<u32>>::new();
+    for mesh in meshes {
+        let (key, lod) = match LOD_FINDER.captures(&mesh.name) {
+            None => continue,
+            Some(matches) => (
+                matches.get(1).unwrap().as_str(),
+                matches
+                    .get(2)
+                    .unwrap()
+                    .as_str()
+                    .parse::<u32>()
+                    .map_err(|_| {
+                        AloError::InvalidLodNumber(matches.get(2).unwrap().as_str().to_owned())
+                    })?,
+            ),
+        };
+        lod_stack.entry(key).or_default().push(lod);
+    }
+
+    let mut result = HashMap::new();
+
+    for (key, mut lods) in lod_stack {
+        if lods.len() < 2 {
+            continue;
+        }
+        lods.sort();
+        let mut prev_end = None;
+        for (idx, &lod) in lods.iter().rev().enumerate() {
+            let start_margin = match prev_end {
+                Some(prev_end) => prev_end,
+                None => 0f32..0f32,
+            };
+            let end_margin = if idx == lods.len() - 1 {
+                f32::INFINITY..f32::INFINITY
+            } else {
+                const RANGE_SCALE_BASE: f32 = 300.0;
+                RANGE_SCALE_BASE.powf(idx as f32 * 0.15 + 1.0)
+                    ..RANGE_SCALE_BASE.powf(idx as f32 * 0.15 + 1.1)
+            };
+            prev_end = Some(end_margin.clone());
+            let range = VisibilityRange {
+                start_margin,
+                end_margin,
+                ..default()
+            };
+            if let Some(_) = result.insert(format!("{key}LOD{lod}"), range.clone()) {
+                return Err(AloError::DuplicateLod {
+                    num: lod,
+                    basename: key.to_owned(),
+                });
+            }
+        }
+    }
+
+    Ok(result)
 }

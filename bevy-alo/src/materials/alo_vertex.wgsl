@@ -8,6 +8,7 @@
 }
 
 #import bevy_alo::alo_io::AloVertexOutput;
+#import bevy_alo::alo_bindings::alo_extension;
 
 #ifdef MORPH_TARGETS
 fn morph_vertex(vertex_in: Vertex) -> Vertex {
@@ -30,6 +31,16 @@ fn morph_vertex(vertex_in: Vertex) -> Vertex {
 #endif
     }
     return vertex;
+}
+#endif
+
+#ifdef ALO_TEAM_COLOR
+#import bevy_alo::alo_bindings::team_colors;
+
+fn get_team_color(instance_index: u32) -> vec4<f32> {
+    let tag = mesh_functions::get_tag(instance_index);
+    let team_color = team_colors[min(tag, 31)];
+    return mix(alo_extension.default_team_color, team_color, team_color.w);
 }
 #endif
 
@@ -127,11 +138,11 @@ fn vertex(vertex_no_morph: Vertex) -> AloVertexOutput {
     alo_out.instance_index = out.instance_index;
 #endif
 #ifdef VISIBILITY_RANGE_DITHER
-    alo_out.visibility_range_dither = out.visibility_range_dither
+    alo_out.visibility_range_dither = out.visibility_range_dither;
 #endif
 
 #ifdef ALO_TEAM_COLOR
-    alo_out.team_color = vec4(1.0, 0.0, 1.0, 1.0);
+    alo_out.team_color = get_team_color(vertex_no_morph.instance_index);
 #endif
 
     return alo_out;

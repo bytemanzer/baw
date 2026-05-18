@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy_alo::AloPlugin;
 use bevy_alo::components::AloBone;
@@ -19,6 +20,7 @@ fn main() {
         .add_plugins(AloPlugin)
         .add_plugins(PanOrbitCameraPlugin)
         .insert_resource(args)
+        .insert_resource(ClearColor(Srgba::BLACK.into()))
         .add_systems(Startup, setup)
         .add_systems(Update, draw_bones)
         .add_systems(Update, pulse_colors)
@@ -30,8 +32,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
+            illuminance: light_consts::lux::AMBIENT_DAYLIGHT,
             ..default()
         },
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            maximum_distance: 2000.0,
+            first_cascade_far_bound: 400.0,
+            minimum_distance: 1.0,
+            ..Default::default()
+        }.build(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // camera

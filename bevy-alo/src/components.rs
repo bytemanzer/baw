@@ -18,7 +18,7 @@ pub struct AloBone;
 
 /// Holds the [`BillboardMode`] of an ALO bone.
 #[derive(Component, Reflect, Clone)]
-#[reflect(opaque)]
+#[reflect(Component, opaque)]
 pub struct AloBillboard(pub BillboardMode);
 
 /// Marker component for entities that are the "meshes" of an Alo file.

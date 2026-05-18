@@ -21,6 +21,11 @@
 #import bevy_pbr::decal::forward::get_forward_decal_info
 #endif
 
+
+#ifdef ALO_GLOSS
+#import bevy_alo::alo_bindings::{gloss_texture, gloss_sampler, alo_extension};
+#endif
+
 #ifdef ALO_TEAM_COLOR
 fn blend_team_color(base_color: vec4<f32>, team_color: vec4<f32>) -> vec4<f32> {
     let colorized = base_color * team_color;
@@ -28,6 +33,14 @@ fn blend_team_color(base_color: vec4<f32>, team_color: vec4<f32>) -> vec4<f32> {
     return vec4(mixed, base_color.w);
 }
 #endif
+
+#ifdef ALO_GLOSS
+fn roughness_from_legacy_gloss(uv: vec2<f32>) -> f32 {
+    let raw_gloss = textureSample(gloss_texture, gloss_sampler, uv).r;
+    let linear_roughness = mix(1.0, alo_extension.min_linear_roughness, raw_gloss);
+    return clamp(sqrt(linear_roughness), 0.2, 1.0);
+}
+#endif ALO_GLOSS
 
 @fragment
 fn fragment(
@@ -54,7 +67,7 @@ fn fragment(
     in.instance_index = vertex_output.instance_index;
 #endif
 #ifdef VISIBILITY_RANGE_DITHER
-    in.visibility_range_dither = vertex_output.visibility_range_dither
+    in.visibility_range_dither = vertex_output.visibility_range_dither;
 #endif
 
     // If we're in the crossfade section of a visibility range, conditionally
@@ -76,6 +89,10 @@ fn fragment(
 #ifdef ALO_TEAM_COLOR
     pbr_input.material.base_color =
         blend_team_color(pbr_input.material.base_color, vertex_output.team_color);
+#endif
+
+#ifdef ALO_GLOSS
+    pbr_input.material.perceptual_roughness = roughness_from_legacy_gloss(in.uv);
 #endif
     // END ALO CUSTOMIZATION
 
