@@ -22,7 +22,7 @@ impl Plugin for AloMaterialsPlugin {
         embedded_asset!(app, "alo_fragment.wgsl");
         let team_colors_buffer =
             app.world_mut()
-                .add_asset(ShaderStorageBuffer::from(vec![[1.0f32, 1.0, 1.0, 0.0]; 32]));
+                .add_asset(ShaderStorageBuffer::from(vec![[1.0f32, 0.0, 1.0, 0.0]; 32]));
         app.add_plugins(MaterialPlugin::<AloMaterial>::default())
             .register_type::<AloMaterialExtension>()
             .insert_resource(TeamColorsMapping { team_colors_buffer });
@@ -31,8 +31,8 @@ impl Plugin for AloMaterialsPlugin {
 
 /// Internal resource which stores the handle to the team colors buffer.
 #[derive(Resource)]
-struct TeamColorsMapping {
-    team_colors_buffer: Handle<ShaderStorageBuffer>,
+pub(crate) struct TeamColorsMapping {
+    pub(crate) team_colors_buffer: Handle<ShaderStorageBuffer>,
 }
 
 /// Adds material properties needed to properly support ALO materials.
@@ -97,10 +97,7 @@ impl MaterialExtension for AloMaterialExtension {
             {
                 fragment.shader_defs.push("ALO_TEAM_COLOR".into());
             }
-            if key
-                .bind_group_data
-                .contains(AloMaterialExtensionKey::GLOSS)
-            {
+            if key.bind_group_data.contains(AloMaterialExtensionKey::GLOSS) {
                 fragment.shader_defs.push("ALO_GLOSS".into());
             }
         }
