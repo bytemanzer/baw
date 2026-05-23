@@ -1,12 +1,13 @@
 use bevy::prelude::*;
-use petro_alo::skeleton::BillboardMode;
 
 pub struct AloComponentsPlugin;
 
 impl Plugin for AloComponentsPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<AloBone>()
-            .register_type::<AloBillboard>()
+            .register_type::<AloFaceCamera>()
+            .register_type::<AloBillboardOut>()
+            .register_type::<AloCamera>()
             .register_type::<AloMesh>();
     }
 }
@@ -16,12 +17,34 @@ impl Plugin for AloComponentsPlugin {
 #[reflect(Component)]
 pub struct AloBone;
 
-/// Holds the [`BillboardMode`] of an ALO bone.
+/// Billboard facing the camera. Optionally offset from the parent position and optionally keep a
+/// vertical.
 #[derive(Component, Reflect, Clone)]
-#[reflect(Component, opaque)]
-pub struct AloBillboard(pub BillboardMode);
+#[require(AloBillboardOut)]
+#[reflect(Component)]
+pub struct AloFaceCamera {
+    /// If true, only rotate around the y axis, keeping the object vertical.
+    pub keep_vertical: bool,
+    /// Offset relative to the parent.
+    pub local_offset: Vec3,
+    /// If true, rotate around the parent instead of the local offset.
+    pub rotate_around_parent: bool,
+}
+
+/// Output component for AloFaceCamera. Gets copied to transform after running billboarding.
+#[derive(Component, Reflect, Clone, Default)]
+#[reflect(Component)]
+pub(crate) struct AloBillboardOut {
+    /// Billboarded transform.
+    pub(crate) new_transform: Transform,
+}
 
 /// Marker component for entities that are the "meshes" of an Alo file.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 pub struct AloMesh;
+
+/// Marker component for the entity which AloFaceCamera billboards point towards.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct AloCamera;

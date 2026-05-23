@@ -2,10 +2,12 @@ use bevy::prelude::*;
 
 pub use error::AloError;
 
+use crate::billboard::AloBillboardPlugin;
 use crate::components::AloComponentsPlugin;
 use crate::materials::AloMaterialsPlugin;
 use crate::models::AloModelsPlugin;
 
+pub mod billboard;
 pub mod components;
 mod error;
 pub mod labels;
@@ -18,7 +20,8 @@ pub struct AloPlugin;
 impl Plugin for AloPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((AloMaterialsPlugin, AloComponentsPlugin))
-            .add_plugins(AloModelsPlugin);
+            .add_plugins(AloModelsPlugin)
+            .add_plugins(AloBillboardPlugin);
     }
 }
 

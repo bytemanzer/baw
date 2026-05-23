@@ -20,7 +20,7 @@ use petro_alo::skeleton::BillboardMode;
 
 use regex::Regex;
 
-use crate::components::{AloBillboard, AloBone, AloMesh};
+use crate::components::{AloBone, AloFaceCamera, AloMesh};
 use crate::labels::AloAssetLabel;
 use crate::materials::{AloMaterial, AloMaterialExtension, TeamColorsMapping};
 use crate::{ALO_TO_BEVY, AloError, alo_to_bevy};
@@ -65,12 +65,15 @@ impl AssetLoader for AloLoader {
         let mut inverse_bindposes = Vec::with_capacity(file.skeleton.bones.len());
         let mut bones = Vec::with_capacity(file.skeleton.bones.len());
         for bone in file.skeleton.bones {
+            // To convert a matrix from alo to bevy, we create a matrix which first transforms
+            // from bevy space to alo space, then performs the transform in alo space, then
+            // transforms back to bevy space.
+            let transform =
+                Transform::from_matrix(ALO_TO_BEVY * bone.local_to_parent * bevy_to_alo);
+            let local_pos = transform.translation;
             let mut bone_builder = world.spawn((
                 AloBone,
-                // To convert a matrix from alo to bevy, we create a matrix which first transforms
-                // from bevy space to alo space, then performs the transform in alo space, then
-                // transforms back to bevy space.
-                Transform::from_matrix(ALO_TO_BEVY * bone.local_to_parent * bevy_to_alo),
+                transform,
                 Name::new(bone.name),
                 if bone.visible {
                     Visibility::Inherited
@@ -78,8 +81,31 @@ impl AssetLoader for AloLoader {
                     Visibility::Hidden
                 },
             ));
-            if bone.billboard != BillboardMode::Disable {
-                bone_builder.insert(AloBillboard(bone.billboard));
+            match bone.billboard {
+                BillboardMode::Disable => {}
+                BillboardMode::Face | BillboardMode::Parallel => {
+                    bone_builder.insert(AloFaceCamera {
+                        keep_vertical: false,
+                        local_offset: local_pos,
+                        rotate_around_parent: false,
+                    });
+                }
+                BillboardMode::ZAxisView => {
+                    bone_builder.insert(AloFaceCamera {
+                        keep_vertical: true,
+                        local_offset: local_pos,
+                        rotate_around_parent: false,
+                    });
+                }
+                BillboardMode::SunlightGlow => {
+                    bone_builder.insert(AloFaceCamera {
+                        keep_vertical: false,
+                        local_offset: local_pos,
+                        rotate_around_parent: true,
+                    });
+                }
+                // TODO: support the rest of the billboard modes.
+                _ => {}
             }
             if let Some(parent) = bone.parent {
                 bone_builder.insert(ChildOf(bones[parent]));

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy_alo::AloPlugin;
-use bevy_alo::components::AloBone;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
+use bevy_alo::billboard::AloBillboardSystemSet;
+use bevy_alo::components::{AloBone, AloCamera};
+use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
 use clap::Parser;
 
 #[derive(Parser, Resource)]
@@ -21,6 +22,10 @@ fn main() {
         .add_plugins(PanOrbitCameraPlugin)
         .insert_resource(args)
         .insert_resource(ClearColor(Srgba::BLACK.into()))
+        .configure_sets(
+            PostUpdate,
+            PanOrbitCameraSystemSet.before(AloBillboardSystemSet),
+        )
         .add_systems(Startup, setup)
         .add_systems(Update, draw_bones)
         .add_systems(Update, pulse_colors)
@@ -41,13 +46,15 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>
             first_cascade_far_bound: 400.0,
             minimum_distance: 1.0,
             ..Default::default()
-        }.build(),
+        }
+        .build(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // camera
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-25.0, 45.0, 90.0).looking_at(Vec3::ZERO, Vec3::Y),
+        AloCamera,
         PanOrbitCamera::default(),
     ));
 
