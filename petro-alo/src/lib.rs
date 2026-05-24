@@ -1,13 +1,17 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use petro_chunked::iter_chunks;
 use thiserror::Error;
 
+use crate::alternatives::{Alt, Lod, LodGroup};
 use crate::connections::Connections;
 pub use crate::error::AloError;
 use crate::error::FormatError;
 use crate::mesh::Mesh;
-use crate::skeleton::Skeleton;
+use crate::skeleton::{Proxy, Skeleton};
 
+pub mod alternatives;
 mod connections;
 mod error;
 mod ids;
@@ -90,7 +94,7 @@ impl AloFile {
             .expect_empty()
             .context("leftover chunks at the top level of the ALO file")?;
 
-        let skeleton = skeleton.unwrap_or_default();
+        let mut skeleton = skeleton.unwrap_or_default();
 
         #[derive(Error, Debug, Copy, Clone)]
         #[error("validating submesh {smidx} of mesh {midx}")]
@@ -98,7 +102,16 @@ impl AloFile {
             midx: usize,
             smidx: usize,
         }
-        for (midx, mesh) in meshes.iter().enumerate() {
+
+        let mut lod_groups = HashMap::<&str, LodGroup>::new();
+        for (midx, mesh) in meshes.iter_mut().enumerate() {
+            if mesh.lod.is_some() {
+                let lod_group_name = Lod::lod_group_name(&mesh.name);
+                let next_lod_group_id = lod_groups.len();
+                mesh.lod_group = *lod_groups
+                    .entry(lod_group_name)
+                    .or_insert(LodGroup(next_lod_group_id));
+            }
             for (smidx, submesh) in mesh.submeshes.iter().enumerate() {
                 let ctx = SubmeshValidationCtx { midx, smidx };
                 for &bone_index in &submesh.bone_mappings {
@@ -146,6 +159,29 @@ impl AloFile {
                     }
                     ConnectionIdx::Light(_) => {}
                 }
+            }
+            #[derive(Error, Debug, Copy, Clone)]
+            #[error("wiring proxy connection {proxy_idx}")]
+            struct ProxyConnCtx {
+                proxy_idx: usize,
+            }
+            for (proxy_idx, proxy_conn) in connections.proxies.into_iter().enumerate() {
+                let ctx = ProxyConnCtx { proxy_idx };
+                let num_bones = skeleton.bones.len();
+                let bone = skeleton
+                    .bones
+                    .get_mut(proxy_conn.bone)
+                    .ok_or(FormatError::ConnObjectOutOfRange {
+                        idx: proxy_conn.bone,
+                        count: num_bones,
+                    })
+                    .context(ctx)?;
+                bone.proxies.push(Proxy {
+                    alt: Alt::from_name(&proxy_conn.proxy_name),
+                    name: proxy_conn.proxy_name,
+                    hidden: proxy_conn.hidden,
+                    alt_decrease_stay_hidden: proxy_conn.alt_decrease_stay_hidden,
+                });
             }
         }
 

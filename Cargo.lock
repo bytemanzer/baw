@@ -434,7 +434,6 @@ dependencies = [
  "bitflags 2.11.1",
  "bytemuck",
  "petro-alo",
- "regex",
  "thiserror 2.0.18",
 ]
 
@@ -4016,6 +4015,7 @@ dependencies = [
  "clap",
  "glam",
  "petro-chunked",
+ "regex",
  "thiserror 2.0.18",
  "tracing-subscriber",
 ]

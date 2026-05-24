@@ -143,6 +143,8 @@ pub(crate) struct ProxyConnection {
     pub(crate) proxy_name: String,
     pub(crate) bone: usize,
     pub(crate) hidden: bool,
+    /// When the Alt level of a model is reduced, don't show this proxy. Only show it when the alt
+    /// level is reached by increasing alt level.
     pub(crate) alt_decrease_stay_hidden: bool,
 }
 

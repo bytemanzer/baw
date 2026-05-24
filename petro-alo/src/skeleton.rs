@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::error::FormatError;
 use crate::ids;
+use crate::alternatives::Alt;
 use crate::primitives::{U32Bool, U32Usize};
 
 /// How a bone should apply billboarding.
@@ -51,6 +52,21 @@ impl<'b> FromByteBlock<'b> for BillboardMode {
     }
 }
 
+/// A proxy object that gets loaded and automatically attached to a bone.
+#[derive(Debug)]
+pub struct Proxy {
+    /// Name of the proxy object to attach.
+    pub name: String,
+    /// Alt level that this proxy should be shown at. If None, this proxy does not respond to alt
+    /// leveling.
+    pub alt: Option<Alt>,
+    /// Whether this proxy is initially hidden.
+    pub hidden: bool,
+    /// For an ALT proxy, don't make the proxy visible when the alt-level changes to the target alt
+    /// by decreasing.
+    pub alt_decrease_stay_hidden: bool,
+}
+
 /// A bone in an ALO file.
 #[derive(Debug)]
 pub struct Bone {
@@ -66,6 +82,8 @@ pub struct Bone {
     pub local_to_parent: Mat4,
     /// Matrix which transforms from this bone to global space.
     pub local_to_global: Mat4,
+    /// List of proxies that should attach to this bone.
+    pub proxies: Vec<Proxy>,
 }
 
 impl Bone {
@@ -135,6 +153,7 @@ impl Bone {
             billboard,
             local_to_parent,
             local_to_global,
+            proxies: Vec::new(),
         })
     }
 }

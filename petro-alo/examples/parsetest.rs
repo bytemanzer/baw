@@ -8,7 +8,7 @@ use clap::Parser;
 use glam::Vec4Swizzles;
 use petro_alo::AloFile;
 use petro_alo::mesh::{Mesh, Shader, ShaderParam, Submesh, VertexFormat};
-use petro_alo::skeleton::Bone;
+use petro_alo::skeleton::{Bone, Proxy};
 
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -104,8 +104,18 @@ fn show_bones(bones: &[Bone], parent: Option<usize>, indent: Indent) {
                 bone.billboard,
                 bone.local_to_global.w_axis.xyz()
             );
+            show_proxies(&bone.proxies, indent.bump());
             show_bones(bones, Some(idx), indent.bump());
         }
+    }
+}
+
+fn show_proxies(proxies: &[Proxy], indent: Indent) {
+    for proxy in proxies {
+        println!(
+            "{indent}Attached: {}, hidden={}, adsh={}",
+            proxy.name, proxy.hidden, proxy.alt_decrease_stay_hidden
+        );
     }
 }
 

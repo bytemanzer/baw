@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use bevy::camera::visibility::VisibilityRange;
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
@@ -15,12 +15,11 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 use petro_alo::AloFile;
+use petro_alo::alternatives::{Lod, LodGroup};
 use petro_alo::mesh::{Mesh as RawAloMesh, Shader as AloShader, ShaderParam, VertexFormat};
 use petro_alo::skeleton::BillboardMode;
 
-use regex::Regex;
-
-use crate::components::{AloBone, AloFaceCamera, AloMesh};
+use crate::components::{AloBone, AloFaceCamera, AloInitialVisibility, AloMesh};
 use crate::labels::AloAssetLabel;
 use crate::materials::{AloMaterial, AloMaterialExtension, TeamColorsMapping};
 use crate::{ALO_TO_BEVY, AloError, alo_to_bevy};
@@ -34,7 +33,20 @@ impl Plugin for AloModelsPlugin {
             .resource::<TeamColorsMapping>()
             .team_colors_buffer
             .clone();
-        app.register_asset_loader(AloLoader { team_colors_buffer });
+        app.register_asset_loader(AloLoader {
+            team_colors_buffer,
+            lod_end_ranges: {
+                let mut ranges = BTreeMap::new();
+                // As far as I know real models only use LODs 0-2.
+                ranges.insert(Lod(0), f32::INFINITY..f32::INFINITY);
+                ranges.insert(Lod(1), 950.0..1000.0);
+                ranges.insert(Lod(2), 290.0..300.0);
+                ranges.insert(Lod(3), 100.0..110.0);
+                ranges.insert(Lod(4), 45.0..50.0);
+                ranges.insert(Lod(5), 9.0..10.0);
+                ranges
+            },
+        });
     }
 }
 
@@ -43,6 +55,10 @@ impl Plugin for AloModelsPlugin {
 struct AloLoader {
     /// Handle to the shader storage buffer containing the team colors.
     team_colors_buffer: Handle<ShaderStorageBuffer>,
+    /// Mapping from LOD levels to the range at which that LOD fades in.
+    /// Each LOD starting being used when the camera is closer than this range, and stops being used
+    /// in favor of a higher LOD if a higher LOD exists at whatever range the next LOD starts.
+    lod_end_ranges: BTreeMap<Lod, Range<f32>>,
 }
 
 impl AssetLoader for AloLoader {
@@ -75,6 +91,9 @@ impl AssetLoader for AloLoader {
                 AloBone,
                 transform,
                 Name::new(bone.name),
+                AloInitialVisibility {
+                    hidden: !bone.visible,
+                },
                 if bone.visible {
                     Visibility::Inherited
                 } else {
@@ -114,16 +133,26 @@ impl AssetLoader for AloLoader {
             inverse_bindposes.push((ALO_TO_BEVY * bone.local_to_global * bevy_to_alo).inverse());
         }
 
-        let mut lods = compute_lods(&file.meshes)?;
+        let mut lods = compute_lods(&file.meshes, &self.lod_end_ranges)?;
         let mut meshes = Vec::with_capacity(file.meshes.len());
         for (mesh_idx, mesh) in file.meshes.into_iter().enumerate() {
             println!("{}", mesh.name);
-            let lod = lods.remove(&mesh.name);
+            let vis_range = match mesh.lod.map(|lod| lods.remove(&(mesh.lod_group, lod))) {
+                // If the mesh has a LOD but there's no visibility range for that LOD level, skip
+                // the whole mesh.
+                Some(None) => continue,
+                Some(Some(range)) => Some(range),
+                // If the mesh has no LOD setting, don't use a visibility range.
+                None => None,
+            };
             let mesh_id = {
                 let mut mesh_builder = world.spawn((
                     AloMesh,
                     Transform::IDENTITY,
                     Name::new(mesh.name),
+                    AloInitialVisibility {
+                        hidden: mesh.hidden,
+                    },
                     if mesh.hidden {
                         Visibility::Hidden
                     } else {
@@ -209,8 +238,8 @@ impl AssetLoader for AloLoader {
                         ChildOf(mesh_id),
                         Visibility::Inherited,
                     ));
-                    if let Some(ref lod) = lod {
-                        submesh_builder.insert(lod.clone());
+                    if let Some(ref vis_range) = vis_range {
+                        submesh_builder.insert(vis_range.clone());
                     }
                     if submesh.vertex_format.contains(VertexFormat::Bones) {
                         let mut submesh_inverse_bindposes =
@@ -382,63 +411,48 @@ fn load_alo_texture(
 }
 
 /// Compute level of detail ranges for the given mesh.
-fn compute_lods(meshes: &[RawAloMesh]) -> Result<HashMap<String, VisibilityRange>, AloError> {
-    static LOD_FINDER: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(.*)LOD([0-9]+)$").unwrap());
-
-    let mut lod_stack = HashMap::<&str, Vec<u32>>::new();
+fn compute_lods(
+    meshes: &[RawAloMesh],
+    lod_end_ranges: &BTreeMap<Lod, Range<f32>>,
+) -> Result<HashMap<(LodGroup, Lod), VisibilityRange>, AloError> {
+    let mut lod_stack = HashMap::<LodGroup, Vec<Lod>>::new();
     for mesh in meshes {
-        let (key, lod) = match LOD_FINDER.captures(&mesh.name) {
-            None => continue,
-            Some(matches) => (
-                matches.get(1).unwrap().as_str(),
-                matches
-                    .get(2)
-                    .unwrap()
-                    .as_str()
-                    .parse::<u32>()
-                    .map_err(|_| {
-                        AloError::InvalidLodNumber(matches.get(2).unwrap().as_str().to_owned())
-                    })?,
-            ),
-        };
-        lod_stack.entry(key).or_default().push(lod);
+        if let Some(lod) = mesh.lod {
+            lod_stack.entry(mesh.lod_group).or_default().push(lod);
+        }
     }
 
     let mut result = HashMap::new();
-
-    for (key, mut lods) in lod_stack {
-        if lods.len() < 2 {
-            continue;
-        }
+    for (group, mut lods) in lod_stack {
         lods.sort();
-        let mut prev_end = None;
-        for (idx, &lod) in lods.iter().rev().enumerate() {
-            let start_margin = match prev_end {
-                Some(prev_end) => prev_end,
-                None => 0f32..0f32,
+        for idx in 0..lods.len() {
+            // If the start range for this LOD doesn't exist, we never show it.
+            let Some(end_margin) = lod_end_ranges.get(&lods[idx]).cloned() else {
+                continue;
             };
-            let end_margin = if idx == lods.len() - 1 {
-                f32::INFINITY..f32::INFINITY
-            } else {
-                const RANGE_SCALE_BASE: f32 = 300.0;
-                RANGE_SCALE_BASE.powf(idx as f32 * 0.15 + 1.0)
-                    ..RANGE_SCALE_BASE.powf(idx as f32 * 0.15 + 1.1)
-            };
-            prev_end = Some(end_margin.clone());
-            let range = VisibilityRange {
-                start_margin,
-                end_margin,
-                ..default()
-            };
-            if let Some(_) = result.insert(format!("{key}LOD{lod}"), range.clone()) {
+            // End at the start of the next LOD or 0 if this is the highest LOD.
+            let start_margin = lods
+                .get(idx + 1)
+                .and_then(|lod| lod_end_ranges.get(lod))
+                .cloned()
+                .unwrap_or(0.0..0.0);
+            let already_inserted = result
+                .insert(
+                    (group, lods[idx]),
+                    VisibilityRange {
+                        start_margin,
+                        end_margin,
+                        use_aabb: false,
+                    },
+                )
+                .is_some();
+            if already_inserted {
                 return Err(AloError::DuplicateLod {
-                    num: lod,
-                    basename: key.to_owned(),
+                    group,
+                    lod: lods[idx],
                 });
             }
         }
     }
-
     Ok(result)
 }

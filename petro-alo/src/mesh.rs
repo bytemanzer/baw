@@ -8,6 +8,7 @@ use petro_chunked::ChunkContent;
 use petro_chunked::byteblock::{ConvertBytes, TakeBytes};
 use thiserror::Error;
 
+use crate::alternatives::{Alt, Lod, LodGroup};
 use crate::error::FormatError;
 use crate::ids;
 use crate::primitives::{U32Bool, U32Usize, U32UsizeVec};
@@ -20,10 +21,17 @@ pub struct BoundingBox {
 }
 
 /// A mesh in an ALO model.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Mesh {
     /// Name of this mesh.
     pub name: String,
+    /// LOD level to use this mesh at. If None, always use this mesh.
+    pub lod: Option<Lod>,
+    /// An arbitrary, opaque identifier which identifies which other meshes within this model are
+    /// LOD alternatives to this Mesh.
+    pub lod_group: LodGroup,
+    /// ALT level to use this mesh at. If None, always use this mesh.
+    pub alt: Option<Alt>,
     /// Bounding box of the mesh.
     pub bounds: BoundingBox,
     /// Whether the mesh is (initially) hidden.
@@ -43,7 +51,7 @@ impl Mesh {
         #[error("parsing the mesh name (chunk 00000401)")]
         struct MeshNameCtx;
 
-        let name = chunks
+        let name: String = chunks
             .expect_chunk(ids::MESH_NAME)
             .context(MeshNameCtx)?
             .data()
@@ -101,6 +109,9 @@ impl Mesh {
         chunks.expect_empty().context("after parsing submeshes")?;
 
         Ok(Mesh {
+            lod: Lod::from_name(&name),
+            lod_group: LodGroup(0),
+            alt: Alt::from_name(&name),
             name,
             bounds,
             hidden,

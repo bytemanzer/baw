@@ -5,6 +5,7 @@ pub struct AloComponentsPlugin;
 impl Plugin for AloComponentsPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<AloBone>()
+            .register_type::<AloInitialVisibility>()
             .register_type::<AloFaceCamera>()
             .register_type::<AloBillboardOut>()
             .register_type::<AloCamera>()
@@ -16,6 +17,14 @@ impl Plugin for AloComponentsPlugin {
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 pub struct AloBone;
+
+/// Stores the initial visibility of an ALO item.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct AloInitialVisibility {
+    /// If true, the ALO item is initially hidden.
+    pub hidden: bool,
+}
 
 /// Billboard facing the camera. Optionally offset from the parent position and optionally keep a
 /// vertical.
