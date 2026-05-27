@@ -109,7 +109,7 @@ impl Bone {
             .expect_chunk([ids::BONE_V1, ids::BONE_V2])
             .context(BoneDataCtx)?;
         let content = bone_data.data().context(BoneDataCtx)?.as_data();
-        let (parent, U32Bool { value: visible }, billboard, matrix): (u32, _, _, [[f32; 4]; 3]) =
+        let (parent, U32Bool(visible), billboard, matrix): (u32, _, _, [[f32; 4]; 3]) =
             match bone_data.id() {
                 ids::BONE_V1 => {
                     let (parent, visible, matrix) = content.convert().context(BoneDataCtx)?;
@@ -173,7 +173,7 @@ impl Skeleton {
         #[error("parsing the bone count (chunk 00000201)")]
         struct BoneCountCtx;
 
-        let (U32Usize { value: bone_count }, _pad): (_, &[u8; 124]) = chunks
+        let (U32Usize(bone_count), _pad): (_, &[u8; 124]) = chunks
             .expect_chunk(ids::BONE_COUNT)
             .context(BoneCountCtx)?
             .data()

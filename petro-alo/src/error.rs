@@ -8,6 +8,12 @@ pub struct AloError {
     source: anyhow::Error,
 }
 
+impl From<FormatError> for AloError {
+    fn from(value: FormatError) -> Self {
+        anyhow::Error::new(value).into()
+    }
+}
+
 /// Format errors specific to Alo files.
 #[derive(Error, Debug)]
 pub enum FormatError {
@@ -43,6 +49,8 @@ pub enum FormatError {
     UnknownVertexFormat { format: String },
     #[error("Shader param {name} specified more than once")]
     DuplicateShaderParam { name: String },
+    #[error("Expected either all 3 frames sizes or none, go a mix between v1 and v2")]
+    MixedAnimationFormats,
 }
 
 impl From<FormatError> for ChunkError {

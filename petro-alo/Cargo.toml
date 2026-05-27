@@ -10,7 +10,7 @@ glam = "^0.32.1"
 regex = "^1.12.3"
 thiserror = "^2.0.18"
 
-petro-chunked = { version = "0.1.0", path = "../petro-chunked" }
+petro-chunked = { version = "0.1.0", path = "../petro-chunked", features = ["glam"] }
 
 [dev-dependencies]
 clap = { version = "^4.6.1", features = ["derive"] }

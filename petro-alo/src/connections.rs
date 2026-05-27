@@ -81,9 +81,7 @@ impl ConnectionCount {
         #[error("parsing the object count (mini-chunk 01)")]
         struct ObjCountCtx;
 
-        let U32Usize {
-            value: object_count,
-        } = mini_chunks
+        let U32Usize(object_count) = mini_chunks
             .expect_chunk(ids::CONNECTION_COUNT_OBJECT)
             .context(ObjCountCtx)?
             .convert()
@@ -93,7 +91,7 @@ impl ConnectionCount {
         #[error("parsing the proxy count (mini-chunk 04)")]
         struct ProxyCountCtx;
 
-        let U32Usize { value: proxy_count } = mini_chunks
+        let U32Usize(proxy_count) = mini_chunks
             .expect_chunk(ids::CONNECTION_COUNT_PROXY)
             .context(ProxyCountCtx)?
             .convert()
@@ -119,7 +117,7 @@ impl ObjectConnection {
         #[error("parsing the object count (mini-chunk 01)")]
         struct ObjIdxCtx;
 
-        let U32Usize { value: object } = mini_chunks
+        let U32Usize(object) = mini_chunks
             .expect_chunk(ids::CONNECTION_OBJECT_OBJ)
             .context(ObjIdxCtx)?
             .convert()
@@ -129,7 +127,7 @@ impl ObjectConnection {
         #[error("parsing the proxy count (mini-chunk 04)")]
         struct BoneIdxCtx;
 
-        let U32Usize { value: bone } = mini_chunks
+        let U32Usize(bone) = mini_chunks
             .expect_chunk(ids::CONNECTION_OBJECT_BONE)
             .context(BoneIdxCtx)?
             .convert()
@@ -164,7 +162,7 @@ impl ProxyConnection {
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the proxy bone (mini-chunk 06)")]
         struct PBoneCtx;
-        let U32Usize { value: bone } = mini_chunks
+        let U32Usize(bone) = mini_chunks
             .expect_chunk(ids::CONNECTION_PROXY_BONE)
             .context(PBoneCtx)?
             .convert()
@@ -173,23 +171,21 @@ impl ProxyConnection {
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the proxy hidden (mini-chunk 07)")]
         struct PHiddenCtx;
-        let U32Bool { value: hidden } = mini_chunks
+        let U32Bool(hidden) = mini_chunks
             .try_expect_chunk(ids::CONNECTION_PROXY_HIDDEN)
             .context(PHiddenCtx)?
             .map(|data| data.convert())
-            .unwrap_or(Ok(U32Bool { value: false }))
+            .unwrap_or(Ok(U32Bool(false)))
             .context(PHiddenCtx)?;
 
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the proxy alt-decrease-stay-hidden (mini-chunk 08)")]
         struct PADSHCtx;
-        let U32Bool {
-            value: alt_decrease_stay_hidden,
-        } = mini_chunks
+        let U32Bool(alt_decrease_stay_hidden) = mini_chunks
             .try_expect_chunk(ids::CONNECTION_PROXY_ADSH)
             .context(PADSHCtx)?
             .map(|data| data.convert())
-            .unwrap_or(Ok(U32Bool { value: false }))
+            .unwrap_or(Ok(U32Bool(false)))
             .context(PADSHCtx)?;
 
         Ok(Self {

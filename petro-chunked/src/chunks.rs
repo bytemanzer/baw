@@ -9,7 +9,7 @@ pub fn iter_chunks<'b>(data: &'b [u8]) -> ChunksIter<'b> {
 }
 
 /// Iterator over [`Chunk`]s in some source data.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChunksIter<'b> {
     /// Source bytes to extract chunks from.
     data: &'b [u8],

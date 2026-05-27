@@ -1,17 +1,24 @@
+//! Provides support for reading (but not writing) Petroglyph's ALO model/particle files and ALA
+//! animation files. Based on Mike Lankamps's excellent documentation of these formats at
+//! [https://glyphxtools.github.io].
+
 use std::collections::HashMap;
 
 use anyhow::Context;
-use petro_chunked::iter_chunks;
+use petro_chunked::{iter_chunks, minichunk};
 use thiserror::Error;
 
 use crate::alternatives::{Alt, Lod, LodGroup};
+use crate::animations::BoneAnimation;
 use crate::connections::Connections;
 pub use crate::error::AloError;
 use crate::error::FormatError;
 use crate::mesh::Mesh;
+use crate::primitives::U32Usize;
 use crate::skeleton::{Proxy, Skeleton};
 
 pub mod alternatives;
+pub mod animations;
 mod connections;
 mod error;
 mod ids;
@@ -19,6 +26,7 @@ pub mod mesh;
 mod primitives;
 pub mod skeleton;
 
+/// An ALO model or particle system.
 #[derive(Debug)]
 pub struct AloFile {
     pub skeleton: Skeleton,
@@ -26,7 +34,7 @@ pub struct AloFile {
 }
 
 impl AloFile {
-    pub fn parse(bytes: &[u8]) -> Result<AloFile, AloError> {
+    pub fn parse(bytes: &[u8]) -> Result<Self, AloError> {
         let mut chunks = iter_chunks(bytes);
 
         #[derive(Copy, Clone)]
@@ -186,5 +194,75 @@ impl AloFile {
         }
 
         Ok(AloFile { skeleton, meshes })
+    }
+}
+
+/// An ALA animation file.
+#[derive(Debug)]
+pub struct AlaFile {
+    /// Number of animation frames per second.
+    pub fps: f32,
+    /// Animations to apply to various bones.
+    pub bone_animations: Vec<BoneAnimation>,
+}
+
+impl AlaFile {
+    pub fn parse(bytes: &[u8]) -> Result<Self, AloError> {
+        let mut chunks = iter_chunks(bytes);
+        let root = chunks
+            .expect_chunk(ids::ANIMATION_ROOT)
+            .context("Getting the root animation chunk from the ALA file")?;
+
+        chunks
+            .expect_empty()
+            .context("Expected only one top-level chunk")?;
+
+        let mut chunks = root
+            .children()
+            .context("Getting the children of the root chunk")?;
+
+        #[derive(Error, Debug, Copy, Clone)]
+        #[error("Getting the header (chunk 0x00001001")]
+        struct AnimationHeaderCtx;
+
+        let (
+            U32Usize(num_frames),
+            fps,
+            U32Usize(num_bones),
+            rot_frame_size,
+            tra_frame_size,
+            sca_frame_size,
+        ) = chunks
+            .expect_chunk(ids::ANIMATION_HEADER)
+            .context(AnimationHeaderCtx)?
+            .data()
+            .context(AnimationHeaderCtx)?
+            .as_mini_chunks()
+            .expect_sequence((
+                minichunk::require(ids::ANIMATION_HEADER_NUM_FRAMES),
+                minichunk::require::<f32>(ids::ANIMATION_HEADER_FPS),
+                minichunk::require(ids::ANIMATION_HEADER_NUM_BONES),
+                minichunk::opt(ids::ANIMATION_HEADER_ROT_FRAME_SIZE),
+                minichunk::opt(ids::ANIMATION_HEADER_TRA_FRAME_SIZE),
+                minichunk::opt(ids::ANIMATION_HEADER_SCA_FRAME_SIZE),
+            ))
+            .context(AnimationHeaderCtx)?;
+        Ok(match (rot_frame_size, tra_frame_size, sca_frame_size) {
+            (None, None, None) => Self::parse_v1(chunks, num_frames, fps, num_bones)?,
+            (
+                Some(U32Usize(rot_frame_size)),
+                Some(U32Usize(tra_frame_size)),
+                Some(U32Usize(sca_frame_size)),
+            ) => Self::parse_v2(
+                chunks,
+                num_frames,
+                fps,
+                num_bones,
+                rot_frame_size,
+                tra_frame_size,
+                sca_frame_size,
+            )?,
+            (_, _, _) => Err(FormatError::MixedAnimationFormats)?,
+        })
     }
 }

@@ -65,15 +65,11 @@ impl Mesh {
 
         type MeshInfo<'b> = (U32Usize, [[f32; 3]; 2], u32, U32Bool, U32Bool, &'b [u8; 88]);
         let (
-            U32Usize {
-                value: submesh_count,
-            },
+            U32Usize(submesh_count),
             bounds,
             _unused,
-            U32Bool { value: hidden },
-            U32Bool {
-                value: collision_enabled,
-            },
+            U32Bool(hidden),
+            U32Bool(collision_enabled),
             _padding,
         ): MeshInfo = chunks
             .expect_chunk(ids::MESH_INFO)
@@ -231,15 +227,7 @@ impl Submesh {
         #[derive(Error, Debug, Copy, Clone)]
         #[error("parsing the submesh info (chunk 00010001)")]
         struct SubmeshInfoCtx;
-        let (
-            U32Usize {
-                value: num_vertices,
-            },
-            U32Usize {
-                value: num_primitives,
-            },
-            _padding,
-        ): (_, _, &[u8; 120]) = data
+        let (U32Usize(num_vertices), U32Usize(num_primitives), _padding): (_, _, &[u8; 120]) = data
             .expect_chunk(ids::SUBMESH_INFO)
             .context(SubmeshInfoCtx)?
             .data()
@@ -481,7 +469,7 @@ impl Submesh {
                 id: ids::SUBMESH_ANIM_MAP,
             })?;
         }
-        let U32UsizeVec { value } = data.data()?.convert()?;
+        let U32UsizeVec(value) = data.data()?.convert()?;
         self.bone_mappings = value;
         Ok(())
     }

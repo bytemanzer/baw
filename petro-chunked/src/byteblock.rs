@@ -13,7 +13,7 @@ pub trait TakeBytes<'b> {
     /// resliced to remove the taken data. Equivalent to:
     ///
     /// ```
-    /// # use petro_chunked::byteblock::ChunkError;
+    /// # use petro_chunked::ChunkError;
     /// fn take_bytes<'b>(data: &mut &'b[u8], n: usize) -> Result<&'b [u8], ChunkError> {
     ///     if data.len() < n {
     ///         return Err(ChunkError::NotEnoughData {
@@ -230,18 +230,39 @@ macro_rules! le_takeable {
     )* };
 }
 
+le_takeable!(
+    u16 => read_u16,
+    i16 => read_i16,
+    u32 => read_u32,
+    i32 => read_i32,
+    f32 => read_f32,
+    u64 => read_u64,
+    i64 => read_i64,
+    f64 => read_f64,
+);
+
 /// Wraps a value of any type that implements `FromByteBlock` and forces it to consume the entire
 /// block, producing an UnusedData error if the block has any data left after it is read. This is
 /// similar in principle to wrapping a regex with `^$`.
 ///
 /// Usage:
 /// ```
-/// # use petro_chunked::byteblock::{TakeBytes, TakeAll, TakeBytesError};
+/// # use petro_chunked::ChunkError;
+/// # use petro_chunked::byteblock::{TakeBytes, TakeAll};
+/// let mut data: &[u8] = &[0x12, 0x34];
+/// let res = data.take::<TakeAll<u16>>();
+/// assert!(matches!(res, Ok(TakeAll(0x3412))));
+/// ```
+///
+/// If there is data left over, it produced [`ChunkError::UnusedData`]:
+/// ```
+/// # use petro_chunked::ChunkError;
+/// # use petro_chunked::byteblock::{TakeBytes, TakeAll};
 /// let mut data: &[u8] = &[0x12, 0x34, 0x56, 0x78];
 /// let res = data.take::<TakeAll<u16>>();
-/// assert!(matches!(res, Err(TakeBytesError::UnusedData { len: 2 })));
+/// assert!(matches!(res, Err(ChunkError::UnusedData { len: 2 })));
 /// ```
-struct TakeAll<T>(T);
+pub struct TakeAll<T>(pub T);
 
 impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for TakeAll<T> {
     fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
@@ -253,17 +274,6 @@ impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for TakeAll<T> {
         }
     }
 }
-
-le_takeable!(
-    u16 => read_u16,
-    i16 => read_i16,
-    u32 => read_u32,
-    i32 => read_i32,
-    f32 => read_f32,
-    u64 => read_u64,
-    i64 => read_i64,
-    f64 => read_f64,
-);
 
 impl<'b, const N: usize> FromFixedByteBlock<'b> for &'b [u8; N] {
     const SIZE: usize = N;
@@ -285,6 +295,33 @@ where
             T::from_bytes(&bytes[offset..offset + T::SIZE])
         })
     }
+}
+
+#[cfg(feature = "glam")]
+mod glam {
+    use glam::{Vec2, Vec3};
+
+    use super::FromFixedByteBlock;
+
+    macro_rules! glam_type_mapping {
+        ( $( $glamt:ty = $rawt:ty => $method:ident, )* ) => {
+            $(
+                impl<'b> FromFixedByteBlock<'b> for $glamt {
+                    const SIZE: usize = <$rawt as FromFixedByteBlock<'b>>::SIZE;
+
+                    fn from_bytes(bytes: &'b [u8]) -> Self {
+                        let raw = <$rawt as FromFixedByteBlock<'b>>::from_bytes(bytes);
+                        <$glamt>::$method(raw)
+                    }
+                }
+            )*
+        };
+    }
+
+    glam_type_mapping!(
+        Vec2 = [f32; 2] => from_array,
+        Vec3 = [f32; 3] => from_array,
+    );
 }
 
 impl<'b, T: FromByteBlock<'b>> FromByteBlock<'b> for Vec<T> {

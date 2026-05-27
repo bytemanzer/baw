@@ -13,6 +13,7 @@ mod error;
 pub mod labels;
 pub mod materials;
 pub mod models;
+pub mod animations;
 
 /// Plugin which adds the ALO asset loader.
 pub struct AloPlugin;

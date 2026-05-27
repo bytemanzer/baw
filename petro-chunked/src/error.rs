@@ -11,14 +11,14 @@ pub enum ChunkError {
     #[error("Error reading mini-chunk header: {0}")]
     MiniHeaderError(#[source] Box<ChunkError>),
     /// The chunk or its parent did not have as much data as the content of this chunk requires.
-    #[error("Error reading contents of chunk {chunk}: {source}")]
+    #[error("Error reading contents of chunk {chunk:0>8x}: {source}")]
     DataError {
         /// ID of the currently processing chunk.
         chunk: u32,
         /// Error that caused this error.
         source: Box<ChunkError>,
     },
-    #[error("Error reading contents of mini-chunk {chunk}: {source}")]
+    #[error("Error reading contents of mini-chunk {chunk:0>8x}: {source}")]
     MiniChunkDataError {
         /// ID of the currently processing mini-chunk.
         chunk: u8,
