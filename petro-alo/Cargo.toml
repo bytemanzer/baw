@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "^1.0.102"
 bitflags = "^2.11.1"
-glam = "^0.30.10"
+glam = "^0.32.1"
 regex = "^1.12.3"
 thiserror = "^2.0.18"
 

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
-use bevy::render::storage::ShaderStorageBuffer;
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use bevy::shader::load_shader_library;
 use bitflags::bitflags;
@@ -22,7 +22,7 @@ impl Plugin for AloMaterialsPlugin {
         embedded_asset!(app, "alo_fragment.wgsl");
         let team_colors_buffer =
             app.world_mut()
-                .add_asset(ShaderStorageBuffer::from(vec![[1.0f32, 0.0, 1.0, 0.0]; 32]));
+                .add_asset(ShaderBuffer::from(vec![[1.0f32, 0.0, 1.0, 0.0]; 32]));
         app.add_plugins(MaterialPlugin::<AloMaterial>::default())
             .register_type::<AloMaterialExtension>()
             .insert_resource(TeamColorsMapping { team_colors_buffer });
@@ -32,7 +32,7 @@ impl Plugin for AloMaterialsPlugin {
 /// Internal resource which stores the handle to the team colors buffer.
 #[derive(Resource)]
 pub(crate) struct TeamColorsMapping {
-    pub(crate) team_colors_buffer: Handle<ShaderStorageBuffer>,
+    pub(crate) team_colors_buffer: Handle<ShaderBuffer>,
 }
 
 /// Adds material properties needed to properly support ALO materials.
@@ -47,7 +47,7 @@ pub struct AloMaterialExtension {
     pub default_team_color: Option<LinearRgba>,
     /// The buffer of possible team colors.
     #[storage(101, read_only)]
-    team_colors: Handle<ShaderStorageBuffer>,
+    team_colors: Handle<ShaderBuffer>,
     /// Minimum roughness, converted from "shininess". This is in linear, not perceptual space.
     /// This sets the limit on how shiny the "gloss" texture can make the material.
     pub min_linear_roughness: Option<f32>,
@@ -59,7 +59,7 @@ pub struct AloMaterialExtension {
 
 impl AloMaterialExtension {
     /// Create a new, empty extension material.
-    pub(crate) fn new(team_colors: Handle<ShaderStorageBuffer>) -> Self {
+    pub(crate) fn new(team_colors: Handle<ShaderBuffer>) -> Self {
         Self {
             default_team_color: None,
             team_colors,

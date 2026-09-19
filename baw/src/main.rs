@@ -36,7 +36,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>
     // light
     commands.spawn((
         DirectionalLight {
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
+            contact_shadows_enabled: true,
             illuminance: light_consts::lux::AMBIENT_DAYLIGHT,
             ..default()
         },
@@ -67,7 +68,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>
         } else {
             model.clone()
         };
-        commands.spawn(SceneRoot(asset_server.load(path)));
+        commands.spawn(WorldAssetRoot(asset_server.load(path)));
     }
 }
 

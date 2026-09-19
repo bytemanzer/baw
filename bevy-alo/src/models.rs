@@ -11,7 +11,7 @@ use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
-use bevy::render::storage::ShaderStorageBuffer;
+use bevy::render::storage::ShaderBuffer;
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 use petro_alo::AloFile;
@@ -54,7 +54,7 @@ impl Plugin for AloModelsPlugin {
 #[derive(Default, TypePath)]
 struct AloLoader {
     /// Handle to the shader storage buffer containing the team colors.
-    team_colors_buffer: Handle<ShaderStorageBuffer>,
+    team_colors_buffer: Handle<ShaderBuffer>,
     /// Mapping from LOD levels to the range at which that LOD fades in.
     /// Each LOD starting being used when the camera is closer than this range, and stops being used
     /// in favor of a higher LOD if a higher LOD exists at whatever range the next LOD starts.
@@ -62,7 +62,7 @@ struct AloLoader {
 }
 
 impl AssetLoader for AloLoader {
-    type Asset = Scene;
+    type Asset = WorldAsset;
     type Error = AloError;
     type Settings = ();
 
@@ -267,7 +267,7 @@ impl AssetLoader for AloLoader {
             meshes.push(mesh_id);
         }
 
-        Ok(Scene { world })
+        Ok(WorldAsset { world })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -312,7 +312,7 @@ macro_rules! expect_shader_param {
 /// Convert an ALO shader to a Bevy material (within reason).
 fn build_submesh_material(
     mut shader: AloShader,
-    team_colors: Handle<ShaderStorageBuffer>,
+    team_colors: Handle<ShaderBuffer>,
     load_context: &mut LoadContext<'_>,
 ) -> Result<Option<AloMaterial>, AloError> {
     let mut base = StandardMaterial::default();
@@ -398,7 +398,7 @@ fn load_alo_texture(
     path.push(tex_name);
     path.set_extension("dds");
     load_context
-        .loader()
+        .load_builder()
         .with_settings(move |settings: &mut ImageLoaderSettings| {
             settings.is_srgb = is_srgb;
             settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
