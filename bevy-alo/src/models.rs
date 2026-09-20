@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use bevy::camera::visibility::VisibilityRange;
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::NotShadowCaster;
 use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 
@@ -90,7 +91,7 @@ impl AssetLoader for AloLoader {
             let mut bone_builder = world.spawn((
                 AloBone,
                 transform,
-                Name::new(bone.name),
+                Name::new(make_ascii_uppercase(bone.name)),
                 AloInitialVisibility {
                     hidden: !bone.visible,
                 },
@@ -145,11 +146,13 @@ impl AssetLoader for AloLoader {
                 // If the mesh has no LOD setting, don't use a visibility range.
                 None => None,
             };
+            let mesh_name = make_ascii_uppercase(mesh.name);
+            let name_category = SpecialNameCategory::categorize(&mesh_name);
             let mesh_id = {
                 let mut mesh_builder = world.spawn((
                     AloMesh,
                     Transform::IDENTITY,
-                    Name::new(mesh.name),
+                    Name::new(mesh_name),
                     AloInitialVisibility {
                         hidden: mesh.hidden,
                     },
@@ -238,6 +241,9 @@ impl AssetLoader for AloLoader {
                         ChildOf(mesh_id),
                         Visibility::Inherited,
                     ));
+                    if name_category == SpecialNameCategory::Blast {
+                        submesh_builder.insert(NotShadowCaster);
+                    }
                     if let Some(ref vis_range) = vis_range {
                         submesh_builder.insert(vis_range.clone());
                     }
@@ -455,4 +461,31 @@ fn compute_lods(
         }
     }
     Ok(result)
+}
+
+/// Indicates if the mesh name contains text that indicates it should be treated specially.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum SpecialNameCategory {
+    /// Don't apply any special handling based on the mesh's name.
+    None,
+    /// The name contains BLAST or other indicator that it is a damage decal. These meshes should
+    /// not cast shadows.
+    Blast,
+}
+
+impl SpecialNameCategory {
+    /// Categorize a mesh name. The name must already have been converted to upper case.
+    fn categorize(name: &str) -> Self {
+        match name {
+            _ if name.ends_with("BLAST") => Self::Blast,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Converts a name string to ascii uppercase. Bones and meshes are often named in mixed case but
+/// referenced in uppercase, so we upcase them for consistency.
+fn make_ascii_uppercase(mut name: String) -> String {
+    name.make_ascii_uppercase();
+    name
 }
