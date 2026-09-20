@@ -1,16 +1,17 @@
-use std::path::PathBuf;
-
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy_alo::AloPlugin;
 use bevy_alo::billboard::AloBillboardSystemSet;
 use bevy_alo::components::{AloBone, AloCamera};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
-use clap::Parser;
+
+use crate::physics::BawPhysicsPlugins;
+
+mod physics;
 
 /// Configures BAW.
 pub struct BawPlugin {
-    /// Prevents external construction.
+    /// Ensures this is not constructible as BawPlugin {}.
     _private: (),
 }
 
@@ -26,6 +27,7 @@ impl Plugin for BawPlugin {
         app.add_plugins(DefaultPlugins)
             .add_plugins(AloPlugin)
             .add_plugins(PanOrbitCameraPlugin)
+            .add_plugins(BawPhysicsPlugins::new())
             .insert_resource(ClearColor(Srgba::BLACK.into()))
             .configure_sets(
                 PostUpdate,

@@ -3,9 +3,26 @@ name = "baw"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["physics-debug"]
+physics-debug = ["avian3d/debug-plugin"]
+
 [dependencies]
 bevy = { version = "0.19.1", features = ["debug", "dds"] }
 bevy_panorbit_camera = "0.35.0"
 clap = { version = "4.6.1", features = ["derive"] }
 
 bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
+
+[dependencies.avian3d]
+version = "^0.7.0"
+default-features = false
+features = [
+    "3d",
+    "f32",
+    "collider-from-mesh",
+    "parry-f32",
+    "parallel",
+    "bevy_scene",
+    "bevy_picking",
+]

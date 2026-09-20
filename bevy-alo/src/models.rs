@@ -170,7 +170,9 @@ impl AssetLoader for AloLoader {
             for (submesh_idx, submesh) in mesh.submeshes.into_iter().enumerate() {
                 let mut msh = Mesh::new(
                     PrimitiveTopology::TriangleList,
-                    RenderAssetUsages::RENDER_WORLD,
+                    // We have to retain all meshes on the CPU side because we dn't know which will
+                    // be needed for features like collision detection, as that is configured later.
+                    RenderAssetUsages::all(),
                 );
                 println!("    {:?}", submesh.vertex_format);
                 msh.insert_indices(Indices::U16(cast_vec(submesh.primitives)));
@@ -221,26 +223,27 @@ impl AssetLoader for AloLoader {
                     .to_string(),
                     msh,
                 );
-                // Build an entity with a visible mesh if a material exists for it.
-                if let Some(material) = build_submesh_material(
+
+               let mut submesh_builder = world.spawn((
+                    Mesh3d(msh),
+                    Transform::IDENTITY,
+                    ChildOf(mesh_id),
+                    Visibility::Inherited,
+                ));
+
+                let material = build_submesh_material(
                     submesh.shader,
                     self.team_colors_buffer.clone(),
                     load_context,
-                )? {
+                )?;
+                if let Some(material) = material {
                     let material_label = AloAssetLabel::SubmeshMaterial {
                         mesh_idx,
                         submesh_idx,
                     };
                     let material =
                         load_context.add_labeled_asset(material_label.to_string(), material);
-                    let mut submesh_builder = world.spawn((
-                        Mesh3d(msh),
-                        MeshMaterial3d(material),
-                        MeshTag(0),
-                        Transform::IDENTITY,
-                        ChildOf(mesh_id),
-                        Visibility::Inherited,
-                    ));
+                    submesh_builder.insert((MeshMaterial3d(material), MeshTag(0)));
                     if name_category == SpecialNameCategory::Blast {
                         submesh_builder.insert(NotShadowCaster);
                     }
