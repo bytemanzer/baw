@@ -28,6 +28,7 @@ use petro_alo::mesh::{
     Mesh as RawAloMesh, Shader as AloShader, ShaderParam, Submesh, SubmeshVertexData, VertexFormat,
 };
 use petro_alo::skeleton::{BillboardMode, Skeleton};
+use baw_scene_util::{scene_type_id, with_template, SceneTypeId};
 
 use crate::components::{AloBone, AloFaceCamera, AloInitialVisibility, AloMesh};
 use crate::labels::AloAssetLabel;
@@ -80,28 +81,6 @@ impl Plugin for AloModelsPlugin {
     }
 }
 
-/// Generates a unique type id tuple for a SceneEntityReference.
-///
-/// The generated tuple consists of the current file path, line, and column, and uniquely identifies
-/// a particular scene type so that entity references from that scene type don't collide with ones
-/// from other scenes.
-macro_rules! scene_type_id {
-    () => {
-        (file!(), line!() as usize, column!() as usize)
-    };
-}
-
-/// Helper for assigning template values within handwritten resolve functions.
-macro_rules! with_template {
-    ($scene:ident, $context:ident, $type:ty) => {
-        with_template!($scene, $context, $type, |_template| {})
-    };
-    ($scene:ident, $context:ident, $type:ty, |$name:ident| $expr:expr) => {{
-        let $name = $scene.get_or_insert_template::<<$type as FromTemplate>::Template>($context);
-        $expr
-    }};
-}
-
 /// An ALO model scene.
 pub struct AloScene {
     /// Uniquely identifies this instance of AloModel scene, preventing identifier collisions
@@ -114,7 +93,7 @@ pub struct AloScene {
 
 impl AloScene {
     /// Unique type ID for the [AloModel] scene type.
-    const TYPE_ID: (&'static str, usize, usize) = scene_type_id!();
+    const TYPE_ID: SceneTypeId = scene_type_id!();
 
     /// Creates a new [AloScene] scene, allocating an instance id for it. The scene is initially
     /// empty.
@@ -185,14 +164,14 @@ impl Scene for AloBoneScene {
         }
         .resolve_inline(context, scene);
         let local_pos = self.transform.translation;
-        with_template!(scene, context, AloBone);
-        with_template!(scene, context, Transform, |trans| {
+        with_template!(context, scene, AloBone);
+        with_template!(context, scene, Transform, |trans| {
             *trans = self.transform;
         });
-        with_template!(scene, context, AloInitialVisibility, |aiv| {
+        with_template!(context, scene, AloInitialVisibility, |aiv| {
             aiv.hidden = !self.visible;
         });
-        with_template!(scene, context, Visibility, |vis| {
+        with_template!(context, scene, Visibility, |vis| {
             *vis = if self.visible {
                 Visibility::Inherited
             } else {
@@ -222,7 +201,7 @@ fn resolve_billboard_mode(
     match mode {
         BillboardMode::Disable => {}
         BillboardMode::Face | BillboardMode::Parallel => {
-            with_template!(scene, context, AloFaceCamera, |afc| {
+            with_template!(context, scene, AloFaceCamera, |afc| {
                 *afc = AloFaceCamera {
                     keep_vertical: false,
                     local_offset: local_pos,
@@ -231,7 +210,7 @@ fn resolve_billboard_mode(
             })
         }
         BillboardMode::ZAxisView => {
-            with_template!(scene, context, AloFaceCamera, |afc| {
+            with_template!(context, scene, AloFaceCamera, |afc| {
                 *afc = AloFaceCamera {
                     keep_vertical: true,
                     local_offset: local_pos,
@@ -240,7 +219,7 @@ fn resolve_billboard_mode(
             })
         }
         BillboardMode::SunlightGlow => {
-            with_template!(scene, context, AloFaceCamera, |afc| {
+            with_template!(context, scene, AloFaceCamera, |afc| {
                 *afc = AloFaceCamera {
                     keep_vertical: false,
                     local_offset: local_pos,
@@ -269,15 +248,15 @@ impl Scene for AloMeshScene {
         context: &mut ResolveContext,
         scene: &mut ResolvedScene,
     ) -> Result<(), ResolveSceneError> {
-        with_template!(scene, context, AloMesh);
-        with_template!(scene, context, Transform);
-        with_template!(scene, context, Name, |name| {
+        with_template!(context, scene, AloMesh);
+        with_template!(context, scene, Transform);
+        with_template!(context, scene, Name, |name| {
             name.set(self.name);
         });
-        with_template!(scene, context, AloInitialVisibility, |aiv| {
+        with_template!(context, scene, AloInitialVisibility, |aiv| {
             aiv.hidden = self.hidden;
         });
-        with_template!(scene, context, Visibility, |vis| {
+        with_template!(context, scene, Visibility, |vis| {
             *vis = if self.hidden {
                 Visibility::Hidden
             } else {
@@ -335,28 +314,28 @@ impl Scene for AloSubmeshScene {
         scene: &mut ResolvedScene,
     ) -> Result<(), ResolveSceneError> {
         // Add the mesh.
-        with_template!(scene, context, Mesh3d, |mesh| {
+        with_template!(context, scene, Mesh3d, |mesh| {
             mesh.0 = self.mesh.into();
         });
-        with_template!(scene, context, Transform);
-        with_template!(scene, context, Visibility, |vis| {
+        with_template!(context, scene, Transform);
+        with_template!(context, scene, Visibility, |vis| {
             *vis = Visibility::Inherited;
         });
 
         // Add materials if set.
         if let Some(mat_props) = self.material_properties {
-            with_template!(scene, context, MeshMaterial3d<AloMaterial>, |mat| {
+            with_template!(context, scene, MeshMaterial3d<AloMaterial>, |mat| {
                 mat.0 = mat_props.material.into();
             });
-            with_template!(scene, context, MeshTag, |tag| {
+            with_template!(context, scene, MeshTag, |tag| {
                 tag.0 = 0;
             });
             if !mat_props.cast_shadows {
-                with_template!(scene, context, NotShadowCaster);
+                with_template!(context, scene, NotShadowCaster);
             }
             // Configure LoD draw distances.
             if let Some(visibility_range) = mat_props.visibility_range {
-                with_template!(scene, context, VisibilityRange, |vis_range| {
+                with_template!(context, scene, VisibilityRange, |vis_range| {
                     *vis_range = visibility_range;
                 });
             }
@@ -364,7 +343,7 @@ impl Scene for AloSubmeshScene {
 
         // Link to bones if skinning.
         if let Some(joints) = self.joints {
-            with_template!(scene, context, SkinnedMesh, |skinned_mesh| {
+            with_template!(context, scene, SkinnedMesh, |skinned_mesh| {
                 skinned_mesh.inverse_bindposes = joints.inverse_bindposes.into();
                 skinned_mesh.joints.0 = joints
                     .bones
@@ -629,7 +608,7 @@ impl AssetLoader for AloLoader {
 
         scene.root_bone = flat_bones_to_tree(bones)?;
 
-        return Ok(ScenePatch::load_with(load_context, scene));
+        Ok(ScenePatch::load_with(load_context, scene))
     }
 
     fn extensions(&self) -> &[&str] {

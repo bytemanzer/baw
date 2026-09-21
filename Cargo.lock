@@ -476,11 +476,15 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "baw"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "avian3d",
+ "baw-scene-util",
  "bevy",
  "bevy-alo",
  "bevy_panorbit_camera",
  "clap",
+ "ron",
+ "serde",
 ]
 
 [[package]]
@@ -504,6 +508,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "baw-scene-util"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_scene",
+]
+
+[[package]]
 name = "bevy"
 version = "0.19.1"
 source = "git+https://github.com/zstewar1/bevy.git?branch=0.19.1-patch#86823f2dc3a4fba66ae2c766f6055afe5538f345"
@@ -515,6 +527,7 @@ dependencies = [
 name = "bevy-alo"
 version = "0.1.0"
 dependencies = [
+ "baw-scene-util",
  "bevy",
  "bitflags 2.13.2",
  "bytemuck",

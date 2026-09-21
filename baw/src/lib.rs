@@ -8,8 +8,10 @@ use bevy_alo::components::{AloBone, AloCamera};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
 
 use crate::physics::BawPhysicsPlugins;
+use crate::units::UnitsPlugin;
 
 mod physics;
+pub mod units;
 
 /// Configures BAW.
 pub struct BawPlugin {
@@ -26,17 +28,20 @@ impl BawPlugin {
 
 impl Plugin for BawPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(DefaultPlugins)
-            .add_plugins(AloPlugins::new().with_texture_path_prefix(Path::new("extracted/textures")))
-            .add_plugins(PanOrbitCameraPlugin)
-            .add_plugins(BawPhysicsPlugins::new())
-            .insert_resource(ClearColor(Srgba::BLACK.into()))
-            .configure_sets(
-                PostUpdate,
-                PanOrbitCameraSystemSet.before(AloBillboardSystemSet),
-            )
-            .add_systems(Startup, setup)
-            .add_systems(Update, draw_bones);
+        app.add_plugins((
+            DefaultPlugins,
+            AloPlugins::new().with_texture_path_prefix(Path::new("extracted/textures")),
+            PanOrbitCameraPlugin,
+            BawPhysicsPlugins::new(),
+            UnitsPlugin,
+        ))
+        .insert_resource(ClearColor(Srgba::BLACK.into()))
+        .configure_sets(
+            PostUpdate,
+            PanOrbitCameraSystemSet.before(AloBillboardSystemSet),
+        )
+        .add_systems(Startup, setup)
+        .add_systems(Update, draw_bones);
     }
 }
 

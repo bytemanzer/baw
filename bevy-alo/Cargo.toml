@@ -9,4 +9,5 @@ bitflags = "^2.11.1"
 bytemuck = { version = "^1.25.0", features = ["extern_crate_alloc"] }
 thiserror = "^2.0.18"
 
+baw-scene-util = { version = "0.1.0", path = "../baw-scene-util" }
 petro-alo = { version = "^0.1.0", path = "../petro-alo" }

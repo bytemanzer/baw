@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["baw", "baw-asset-extractor", "baw-asset-extractor-cli", "bevy-alo", "petro-alo", "petro-chunked"]
+members = [
+    "baw",
+    "baw-asset-extractor",
+    "baw-asset-extractor-cli",
+    "baw-scene-util",
+    "bevy-alo",
+    "petro-alo",
+    "petro-chunked",
+]
 
 [profile.dev]
 opt-level = 1
