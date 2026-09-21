@@ -53,6 +53,7 @@ impl Indent {
         Self { depth }
     }
 
+    #[allow(unused)]
     fn bump(&self) -> Indent {
         Indent {
             depth: self.depth + 4,

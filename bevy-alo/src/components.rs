@@ -14,12 +14,12 @@ impl Plugin for AloComponentsPlugin {
 }
 
 /// Marker component for entities that are the bones of an Alo skeleton.
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Clone, Default)]
 #[reflect(Component)]
 pub struct AloBone;
 
 /// Stores the initial visibility of an ALO item.
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Clone, Default)]
 #[reflect(Component)]
 pub struct AloInitialVisibility {
     /// If true, the ALO item is initially hidden.
@@ -28,7 +28,7 @@ pub struct AloInitialVisibility {
 
 /// Billboard facing the camera. Optionally offset from the parent position and optionally keep a
 /// vertical.
-#[derive(Component, Reflect, Clone)]
+#[derive(Component, Reflect, Clone, Default)]
 #[require(AloBillboardOut)]
 #[reflect(Component)]
 pub struct AloFaceCamera {
@@ -49,7 +49,7 @@ pub(crate) struct AloBillboardOut {
 }
 
 /// Marker component for entities that are the "meshes" of an Alo file.
-#[derive(Component, Reflect)]
+#[derive(Default, Clone, Component, Reflect)]
 #[reflect(Component)]
 pub struct AloMesh;
 

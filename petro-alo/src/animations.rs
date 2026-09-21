@@ -1,3 +1,6 @@
+// Temporary because this module is incomplete.
+#![allow(unused)]
+
 use anyhow::Context;
 use glam::Vec3;
 use petro_chunked::chunks::ChunksIter;

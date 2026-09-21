@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use baw::BawPlugin;
 use bevy::prelude::*;
+use bevy::scene::CachedSceneAsset;
 use clap::Parser;
 
 #[derive(Parser, Resource)]
@@ -28,7 +29,7 @@ fn main() {
     app.run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>) {
+fn setup(mut commands: Commands, args: Res<Args>) {
     // selected model
     if let Some(ref model) = args.model {
         let path = if let Ok(path) = model.strip_prefix("baw/assets") {
@@ -38,7 +39,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>
         } else {
             model.clone()
         };
-        commands.spawn(WorldAssetRoot(asset_server.load(path)));
+        commands.queue_spawn_scene(CachedSceneAsset(path.into()));
     }
 }
 

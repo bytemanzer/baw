@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
-use bevy_alo::AloPlugin;
+use bevy_alo::AloPlugins;
 use bevy_alo::billboard::AloBillboardSystemSet;
 use bevy_alo::components::{AloBone, AloCamera};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
@@ -25,7 +27,7 @@ impl BawPlugin {
 impl Plugin for BawPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(DefaultPlugins)
-            .add_plugins(AloPlugin)
+            .add_plugins(AloPlugins::new().with_texture_path_prefix(Path::new("extracted/textures")))
             .add_plugins(PanOrbitCameraPlugin)
             .add_plugins(BawPhysicsPlugins::new())
             .insert_resource(ClearColor(Srgba::BLACK.into()))

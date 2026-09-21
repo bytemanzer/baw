@@ -135,10 +135,7 @@ fn show_meshes(
         if mesh.collision_enabled {
             print!(" Collider");
         }
-        match mesh.parent_bone {
-            Some(bidx) => println!(" [{}]", bones[bidx].name),
-            None => println!(),
-        }
+        println!(" [{}]", bones[mesh.parent_bone].name);
         let indent = indent.bump();
         for (idx, submesh) in mesh.submeshes.iter().enumerate() {
             println!(
@@ -179,37 +176,42 @@ fn show_shader_params(
 
 fn find_used_vertex_values(submesh: &Submesh) -> VertexFields {
     let mut fields = VertexFields::empty();
-    if submesh.positions.iter().any(|&p| p != [0.0, 0.0, 0.0]) {
+    let vertex_data = &submesh.vertex_data;
+    if vertex_data.positions.iter().any(|&p| p != [0.0, 0.0, 0.0]) {
         fields |= VertexFields::POS;
     }
-    if submesh.normals.iter().any(|&n| n != [0.0, 0.0, 0.0]) {
+    if vertex_data.normals.iter().any(|&n| n != [0.0, 0.0, 0.0]) {
         fields |= VertexFields::NORM;
     }
-    if submesh.tex_coords[0].iter().any(|&t| t != [0.0, 0.0]) {
+    if vertex_data.tex_coords[0].iter().any(|&t| t != [0.0, 0.0]) {
         fields |= VertexFields::TC0;
     }
-    if submesh.tex_coords[1].iter().any(|&t| t != [0.0, 0.0]) {
+    if vertex_data.tex_coords[1].iter().any(|&t| t != [0.0, 0.0]) {
         fields |= VertexFields::TC1;
     }
-    if submesh.tex_coords[2].iter().any(|&t| t != [0.0, 0.0]) {
+    if vertex_data.tex_coords[2].iter().any(|&t| t != [0.0, 0.0]) {
         fields |= VertexFields::TC2;
     }
-    if submesh.tex_coords[3].iter().any(|&t| t != [0.0, 0.0]) {
+    if vertex_data.tex_coords[3].iter().any(|&t| t != [0.0, 0.0]) {
         fields |= VertexFields::TC3;
     }
-    if submesh.tangents.iter().any(|&t| t != [0.0, 0.0, 0.0]) {
+    if vertex_data.tangents.iter().any(|&t| t != [0.0, 0.0, 0.0]) {
         fields |= VertexFields::TAN;
     }
-    if submesh.binormals.iter().any(|&t| t != [0.0, 0.0, 0.0]) {
+    if vertex_data.binormals.iter().any(|&t| t != [0.0, 0.0, 0.0]) {
         fields |= VertexFields::BIN;
     }
-    if submesh.colors.iter().any(|&t| t != [0.0, 0.0, 0.0, 0.0]) {
+    if vertex_data
+        .colors
+        .iter()
+        .any(|&t| t != [0.0, 0.0, 0.0, 0.0])
+    {
         fields |= VertexFields::COL;
     }
-    if submesh.bone_indices.iter().any(|&t| t != [0, 0, 0, 0]) {
+    if vertex_data.bone_indices.iter().any(|&t| t != [0, 0, 0, 0]) {
         fields |= VertexFields::BIDX;
     }
-    if submesh
+    if vertex_data
         .bone_weights
         .iter()
         .any(|&t| t != [0.0, 0.0, 0.0, 0.0])

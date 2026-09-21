@@ -4,9 +4,9 @@ use petro_chunked::ChunkContent;
 use petro_chunked::byteblock::{ConvertBytes, FromByteBlock};
 use thiserror::Error;
 
+use crate::alternatives::Alt;
 use crate::error::FormatError;
 use crate::ids;
-use crate::alternatives::Alt;
 use crate::primitives::{U32Bool, U32Usize};
 
 /// How a bone should apply billboarding.
@@ -73,6 +73,8 @@ pub struct Bone {
     /// Name of the bone.
     pub name: String,
     /// Index of the parent bone, if any.
+    ///
+    /// Every bone other than the first (root) will have a parent.
     pub parent: Option<usize>,
     /// Whether things attached to the bone are visible.
     pub visible: bool,
@@ -119,7 +121,18 @@ impl Bone {
                 _ => unreachable!(),
             };
         let (parent, parent_to_global) = match parent {
-            u32::MAX => (None, Mat4::IDENTITY),
+            u32::MAX => {
+                // Only the first bone is parentless.
+                if !existing_bones.is_empty() {
+                    Err(FormatError::MisorderedBone {
+                        idx: existing_bones.len(),
+                        // Even if this overflows (which it never will on any supported platform) it
+                        // will still appear as all ones.
+                        parent: u32::MAX as usize,
+                    })?;
+                }
+                (None, Mat4::IDENTITY)
+            }
             parent => {
                 let parent: usize = parent
                     .try_into()

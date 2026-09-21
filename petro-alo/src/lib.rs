@@ -2,7 +2,7 @@
 //! animation files. Based on Mike Lankamps's excellent documentation of these formats at
 //! [https://glyphxtools.github.io].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use petro_chunked::{iter_chunks, minichunk};
@@ -40,7 +40,7 @@ impl AloFile {
         #[derive(Copy, Clone)]
         enum ConnectionIdx {
             Mesh(usize),
-            Light(usize),
+            Light(#[allow(unused)] usize),
         }
 
         let mut skeleton = None;
@@ -140,6 +140,7 @@ impl AloFile {
             struct ObjConnCtx {
                 obj_idx: usize,
             }
+            let mut parented_meshes = HashSet::<usize>::new();
             for (obj_idx, obj_conn) in connections.objects.into_iter().enumerate() {
                 let ctx = ObjConnCtx { obj_idx };
                 if obj_conn.bone >= skeleton.bones.len() {
@@ -159,14 +160,18 @@ impl AloFile {
                     .context(ctx)?;
                 match *obj {
                     ConnectionIdx::Mesh(mesh_idx) => {
-                        let mesh = &mut meshes[mesh_idx];
-                        if mesh.parent_bone.is_some() {
+                        if !parented_meshes.insert(mesh_idx) {
                             Err(FormatError::MultiParentMesh { mesh_idx }).context(ctx)?;
                         }
-                        mesh.parent_bone = Some(obj_conn.bone);
+                        meshes[mesh_idx].parent_bone = obj_conn.bone;
                     }
                     ConnectionIdx::Light(_) => {}
                 }
+            }
+            if parented_meshes.len() < meshes.len() {
+                Err(FormatError::DetachedMeshes {
+                    count: meshes.len() - parented_meshes.len(),
+                })?;
             }
             #[derive(Error, Debug, Copy, Clone)]
             #[error("wiring proxy connection {proxy_idx}")]
@@ -191,6 +196,10 @@ impl AloFile {
                     alt_decrease_stay_hidden: proxy_conn.alt_decrease_stay_hidden,
                 });
             }
+        } else if meshes.len() > 0 || lights > 0 {
+            Err(FormatError::MissingChunk {
+                id: ids::CONNECTION,
+            })?;
         }
 
         Ok(AloFile { skeleton, meshes })

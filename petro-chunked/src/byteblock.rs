@@ -1,6 +1,7 @@
 //! Provides utilites for taking bytes out of a chunked file.
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 
 use byteorder::{ByteOrder, LE};
 
@@ -357,6 +358,20 @@ impl<'b> FromByteBlock<'b> for String {
     fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
         let (s, rest) = <&'b str>::take_from(bytes)?;
         Ok((s.to_owned(), rest))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for &'b Path {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (s, rest) = <&'b str>::take_from(bytes)?;
+        Ok((Path::new(s), rest))
+    }
+}
+
+impl<'b> FromByteBlock<'b> for PathBuf {
+    fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
+        let (s, rest) = String::take_from(bytes)?;
+        Ok((s.into(), rest))
     }
 }
 

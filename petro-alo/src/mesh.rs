@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -40,7 +41,7 @@ pub struct Mesh {
     pub collision_enabled: bool,
     pub submeshes: Vec<Submesh>,
     /// Bone to attach this mesh to.
-    pub parent_bone: Option<usize>,
+    pub parent_bone: usize,
 }
 
 impl Mesh {
@@ -106,6 +107,7 @@ impl Mesh {
 
         Ok(Mesh {
             lod: Lod::from_name(&name),
+            // Actual group will be decided later.
             lod_group: LodGroup(0),
             alt: Alt::from_name(&name),
             name,
@@ -113,7 +115,8 @@ impl Mesh {
             hidden,
             collision_enabled,
             submeshes,
-            parent_bone: None,
+            // Parent bones will be attached later, when reading the connections chunk.
+            parent_bone: 0,
         })
     }
 }
@@ -191,6 +194,13 @@ impl FromStr for VertexFormat {
 pub struct Submesh {
     /// Shader to use for this mesh.
     pub shader: Shader,
+    /// The vertex buffer's bone_indicies are actually an indirection, the indicies in bone_indices
+    /// point to the bone_mappings vector stored here. The indices here then refer to actual bone
+    /// indicies from the model's bones.
+    pub bone_mappings: Vec<usize>,
+    /// Buffer of vertex indices. Each index points into all of the vertex buffers, sets of 3
+    /// vertices make a triangle.
+    pub primitives: Vec<[u16; 3]>,
     /// Vertex format of this submesh. Determines which of the vertex buffers should actually be
     /// used.
     ///
@@ -199,21 +209,8 @@ pub struct Submesh {
     pub vertex_format_string: String,
     /// Interpreted vertex format.
     pub vertex_format: VertexFormat,
-    /// Buffer of vertex indices. Each index points into all of the vertex buffers, sets of 3
-    /// vertices make a triangle.
-    pub primitives: Vec<[u16; 3]>,
-    /// Mappings from indexes used by bone_indices (which refer to this array) to bones in the
-    /// skeleton segment (referenced by the u32 values held here).
-    pub bone_mappings: Vec<usize>,
-    pub positions: Vec<[f32; 3]>,
-    pub normals: Vec<[f32; 3]>,
-    pub tex_coords: [Vec<[f32; 2]>; 4],
-    pub tangents: Vec<[f32; 3]>,
-    pub binormals: Vec<[f32; 3]>,
-    pub colors: Vec<[f32; 4]>,
-    /// Indexes into the bone_mappings array.
-    pub bone_indices: Vec<[u16; 4]>,
-    pub bone_weights: Vec<[f32; 4]>,
+    /// Vertex data for this mesh.
+    pub vertex_data: SubmeshVertexData,
 }
 
 impl Submesh {
@@ -253,19 +250,7 @@ impl Submesh {
             vertex_format,
             primitives: Vec::new(),
             bone_mappings: Vec::new(),
-            positions: Vec::with_capacity(num_vertices),
-            normals: Vec::with_capacity(num_vertices),
-            tex_coords: [
-                Vec::with_capacity(num_vertices),
-                Vec::with_capacity(num_vertices),
-                Vec::with_capacity(num_vertices),
-                Vec::with_capacity(num_vertices),
-            ],
-            tangents: Vec::with_capacity(num_vertices),
-            binormals: Vec::with_capacity(num_vertices),
-            colors: Vec::with_capacity(num_vertices),
-            bone_indices: Vec::with_capacity(num_vertices),
-            bone_weights: Vec::with_capacity(num_vertices),
+            vertex_data: SubmeshVertexData::with_capacity(num_vertices),
         };
 
         loop {
@@ -293,12 +278,14 @@ impl Submesh {
                 }
                 ids::SUBMESH_VERTEX_BUF_V1 => {
                     submesh
-                        .parse_v1_vertex_buf(chunk.content(), num_vertices)
+                        .vertex_data
+                        .parse_v1(chunk.content(), num_vertices)
                         .context("parsing the submesh v1 vertex buffer (chunk 00010005)")?;
                 }
                 ids::SUBMESH_VERTEX_BUF_V2 => {
                     submesh
-                        .parse_v2_vertex_buf(chunk.content(), num_vertices)
+                        .vertex_data
+                        .parse_v2(chunk.content(), num_vertices)
                         .context("parsing the submesh v1 vertex buffer (chunk 00010007)")?;
                 }
                 ids::SUBMESH_COLLISION => {}
@@ -311,15 +298,15 @@ impl Submesh {
         if submesh.primitives.is_empty() {
             Err(FormatError::MissingPrimitives)?;
         }
-        if submesh.positions.is_empty() {
+        if submesh.vertex_data.positions.is_empty() {
             Err(FormatError::MissingVertices)?;
         }
         for prim in &submesh.primitives {
             for &idx in prim {
-                if idx as usize >= submesh.positions.len() {
+                if idx as usize >= submesh.vertex_data.positions.len() {
                     Err(FormatError::PrimitiveIndexOutOfRange {
                         idx,
-                        len: submesh.positions.len(),
+                        len: submesh.vertex_data.positions.len(),
                     })?;
                 }
             }
@@ -327,9 +314,10 @@ impl Submesh {
         if !submesh.bone_mappings.is_empty() {
             let bone_index_count = submesh.bone_mappings.len().min(u16::MAX as usize) as u16;
             for (bidx, &bwt) in submesh
+                .vertex_data
                 .bone_indices
                 .iter_mut()
-                .zip(submesh.bone_weights.iter())
+                .zip(submesh.vertex_data.bone_weights.iter())
             {
                 *bidx = squash_bone_indices(*bidx, bwt, bone_index_count)?;
             }
@@ -355,7 +343,55 @@ impl Submesh {
         Ok(())
     }
 
-    fn parse_v1_vertex_buf(&mut self, data: ChunkContent, expected: usize) -> anyhow::Result<()> {
+    fn parse_bone_mapping(&mut self, data: ChunkContent) -> anyhow::Result<()> {
+        if !self.bone_mappings.is_empty() {
+            Err(FormatError::DuplicateChunk {
+                id: ids::SUBMESH_ANIM_MAP,
+            })?;
+        }
+        let U32UsizeVec(value) = data.data()?.convert()?;
+        self.bone_mappings = value;
+        Ok(())
+    }
+}
+
+/// Contains data for each vertex in the submesh.
+#[derive(Debug, Default)]
+pub struct SubmeshVertexData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub tex_coords: [Vec<[f32; 2]>; 4],
+    pub tangents: Vec<[f32; 3]>,
+    pub binormals: Vec<[f32; 3]>,
+    pub colors: Vec<[f32; 4]>,
+    /// Indexes into the bone_mappings array.
+    pub bone_indices: Vec<[u16; 4]>,
+    pub bone_weights: Vec<[f32; 4]>,
+}
+
+impl SubmeshVertexData {
+    /// Create buffers for the submesh vertex data with the expected capacity.
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            positions: Vec::with_capacity(capacity),
+            normals: Vec::with_capacity(capacity),
+            tex_coords: [
+                Vec::with_capacity(capacity),
+                Vec::with_capacity(capacity),
+                Vec::with_capacity(capacity),
+                Vec::with_capacity(capacity),
+            ],
+            tangents: Vec::with_capacity(capacity),
+            binormals: Vec::with_capacity(capacity),
+            colors: Vec::with_capacity(capacity),
+            bone_indices: Vec::with_capacity(capacity),
+            bone_weights: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Parse v1 vertex data into self, errors if self already contains vertex data or the amount of
+    /// data read doesn't match what is expected.
+    fn parse_v1(&mut self, data: ChunkContent, expected: usize) -> anyhow::Result<()> {
         type VertexV1 = (
             // Position
             [f32; 3],
@@ -408,7 +444,9 @@ impl Submesh {
         Ok(())
     }
 
-    fn parse_v2_vertex_buf(&mut self, data: ChunkContent, expected: usize) -> anyhow::Result<()> {
+    /// Parse v2 vertex data into self, errors if self already contains vertex data or the amount of
+    /// data read doesn't match what is expected.
+    fn parse_v2(&mut self, data: ChunkContent, expected: usize) -> anyhow::Result<()> {
         type VertexV2 = (
             // Position
             [f32; 3],
@@ -462,20 +500,10 @@ impl Submesh {
         }
         Ok(())
     }
-
-    fn parse_bone_mapping(&mut self, data: ChunkContent) -> anyhow::Result<()> {
-        if !self.bone_mappings.is_empty() {
-            Err(FormatError::DuplicateChunk {
-                id: ids::SUBMESH_ANIM_MAP,
-            })?;
-        }
-        let U32UsizeVec(value) = data.data()?.convert()?;
-        self.bone_mappings = value;
-        Ok(())
-    }
 }
 
-/// Squash an array of u32 values down to u16.
+/// Squash an array of u32 values down to u16. Uses bone weights to decide whether to treat
+/// out-of-bounds indexes as an error, as some models have invalid indices in zero-weight bones.
 fn squash_bone_indices(
     [i1, i2, i3, i4]: [impl Into<u32>; 4],
     [w1, w2, w3, w4]: [f32; 4],
@@ -589,6 +617,6 @@ pub enum ShaderParam {
     Int(i32),
     Float(f32),
     Float3([f32; 3]),
-    Texture(String),
+    Texture(PathBuf),
     Float4([f32; 4]),
 }

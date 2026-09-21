@@ -19,6 +19,8 @@ impl From<FormatError> for AloError {
 pub enum FormatError {
     #[error("Chunk {id:0>8x} unexpectedly found more than once")]
     DuplicateChunk { id: u32 },
+    #[error("Chunk {id:0>8x} was expected but not found")]
+    MissingChunk { id: u32 },
     #[error("Out-of-order bone: bone {idx} has parent {parent}")]
     MisorderedBone { idx: usize, parent: usize },
     #[error("Expected at least one bone mapping but found 0")]
@@ -43,6 +45,8 @@ pub enum FormatError {
     ConnBoneOutOfRange { idx: usize, count: usize },
     #[error("Connection mapping to object {idx} out of range, only {count} objects.")]
     ConnObjectOutOfRange { idx: usize, count: usize },
+    #[error("{count} meshes are missing parent connections")]
+    DetachedMeshes { count: usize },
     #[error("Mesh {mesh_idx} connected to multiple bones")]
     MultiParentMesh { mesh_idx: usize },
     #[error("Vertex format {format:?} not recognized")]

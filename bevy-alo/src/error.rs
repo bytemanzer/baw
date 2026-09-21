@@ -2,7 +2,6 @@ use std::io;
 
 use bevy::asset::LoadDirectError;
 use petro_alo::alternatives::{Lod, LodGroup};
-use petro_alo::mesh::ShaderParam;
 use thiserror::Error;
 
 /// Error from loading an ALO asset.
@@ -16,12 +15,25 @@ pub enum AloError {
     RequiredSubAsset(#[from] LoadDirectError),
     #[error("Unable to create a collider from a collision mesh")]
     ConvexDecompositionFailed,
-    #[error("Shader param {param} had an unexpected type {value:?}, expected {expected}")]
+    #[error("Shader param {param} had an unexpected type {value_type:?}, expected {expected}")]
     UnexpectedShaderValueType {
         param: &'static str,
-        value: ShaderParam,
+        value_type: &'static str,
         expected: &'static str,
     },
     #[error("Mesh duplicate LOD {lod:?} for group {group:?}")]
     DuplicateLod { group: LodGroup, lod: Lod },
+    #[error("Mesh had an unkown LOD {lod:?} for group {group:?}")]
+    UnknownLod { group: LodGroup, lod: Lod },
+    /// Bones must specify a parent with an index that is strictly less than their own index in the
+    /// skeleton.
+    #[error("{category} at index {item_idx} specified invalid parent index {parent_idx}")]
+    InvalidParentIndex {
+        category: &'static str,
+        item_idx: usize,
+        parent_idx: usize,
+    },
+    /// All bones besides the root are required to specify a parent.
+    #[error("Bone at index {bone_idx} is missing a parent")]
+    MissingParent { bone_idx: usize },
 }

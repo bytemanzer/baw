@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bevy::camera::visibility::VisibilityRange;
+use bevy::ecs::template::{EntityTemplate, SceneEntityReference};
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
 use bevy::pbr::ExtendedMaterial;
@@ -13,19 +15,45 @@ use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
 use bevy::render::storage::ShaderBuffer;
+use bevy::scene::macro_utils::CallCounter;
+use bevy::scene::{
+    NameEntityReference, ResolveContext, ResolveSceneError, ResolvedScene, SceneDependencies,
+    ScenePatch,
+};
 use bevy::transform::components::Transform;
 use bytemuck::cast_vec;
 use petro_alo::AloFile;
 use petro_alo::alternatives::{Lod, LodGroup};
-use petro_alo::mesh::{Mesh as RawAloMesh, Shader as AloShader, ShaderParam, VertexFormat};
-use petro_alo::skeleton::BillboardMode;
+use petro_alo::mesh::{
+    Mesh as RawAloMesh, Shader as AloShader, ShaderParam, Submesh, SubmeshVertexData, VertexFormat,
+};
+use petro_alo::skeleton::{BillboardMode, Skeleton};
 
 use crate::components::{AloBone, AloFaceCamera, AloInitialVisibility, AloMesh};
 use crate::labels::AloAssetLabel;
 use crate::materials::{AloMaterial, AloMaterialExtension, TeamColorsMapping};
 use crate::{ALO_TO_BEVY, AloError, alo_to_bevy};
 
-pub struct AloModelsPlugin;
+#[derive(Default, Clone)]
+pub struct AloModelsPlugin {
+    /// Path prefix to insert in front of ALO texture file names.
+    texture_path_prefix: Option<Arc<Path>>,
+}
+
+impl AloModelsPlugin {
+    /// Create a new AloModelsPlugin with no path prefixes set.
+    pub const fn new() -> Self {
+        Self {
+            texture_path_prefix: None,
+        }
+    }
+
+    /// Sets the prefix to prepend to texture paths in ALO model files.
+    pub fn set_texture_path_prefix(&mut self, prefix: impl Into<Arc<Path>>) -> &mut Self {
+        self.texture_path_prefix = Some(prefix.into());
+        self
+    }
+}
 
 impl Plugin for AloModelsPlugin {
     fn build(&self, app: &mut App) {
@@ -47,9 +75,317 @@ impl Plugin for AloModelsPlugin {
                 ranges.insert(Lod(5), 9.0..10.0);
                 ranges
             },
+            texture_path_prefix: self.texture_path_prefix.clone(),
         });
     }
 }
+
+/// Generates a unique type id tuple for a SceneEntityReference.
+///
+/// The generated tuple consists of the current file path, line, and column, and uniquely identifies
+/// a particular scene type so that entity references from that scene type don't collide with ones
+/// from other scenes.
+macro_rules! scene_type_id {
+    () => {
+        (file!(), line!() as usize, column!() as usize)
+    };
+}
+
+/// Helper for assigning template values within handwritten resolve functions.
+macro_rules! with_template {
+    ($scene:ident, $context:ident, $type:ty) => {
+        with_template!($scene, $context, $type, |_template| {})
+    };
+    ($scene:ident, $context:ident, $type:ty, |$name:ident| $expr:expr) => {{
+        let $name = $scene.get_or_insert_template::<<$type as FromTemplate>::Template>($context);
+        $expr
+    }};
+}
+
+/// An ALO model scene.
+pub struct AloScene {
+    /// Uniquely identifies this instance of AloModel scene, preventing identifier collisions
+    /// between different AloModels or different instantiations of the same model as independent
+    /// scenes.
+    instance_id: u64,
+    /// Root bone of this scene, if this is a model. Absent for particle systems.
+    root_bone: Option<AloBoneScene>,
+}
+
+impl AloScene {
+    /// Unique type ID for the [AloModel] scene type.
+    const TYPE_ID: (&'static str, usize, usize) = scene_type_id!();
+
+    /// Creates a new [AloScene] scene, allocating an instance id for it. The scene is initially
+    /// empty.
+    fn new() -> Self {
+        static INSTANCE_ID: CallCounter = CallCounter::new();
+        Self {
+            instance_id: INSTANCE_ID.increment(),
+            root_bone: None,
+        }
+    }
+}
+
+impl Scene for AloScene {
+    fn resolve(
+        self,
+        context: &mut ResolveContext,
+        scene: &mut ResolvedScene,
+    ) -> Result<(), ResolveSceneError> {
+        self.root_bone.resolve(context, scene)?;
+        Ok(())
+    }
+
+    fn register_dependencies(&self, deps: &mut SceneDependencies) {
+        self.root_bone.register_dependencies(deps);
+    }
+}
+
+/// Scene representing a bone from an ALO file.
+struct AloBoneScene {
+    /// Unique scene instance ID for the [`AloScene`] this bone is part of.
+    instance_id: u64,
+    /// Index of this bone within the scene, used to uniquely identify it from other bones.
+    bone_idx: usize,
+    /// Index of this bone's parent. Not needed for scene construction, since we use a tree
+    /// structure, but it is needed to convert a flat list of bone scenes into the final tree
+    /// structure.
+    parent_idx: Option<usize>,
+    /// Name of the bone.
+    name: String,
+    /// Transform to apply to this bone relative to its parent.
+    transform: Transform,
+    /// Inverse bindpose for this bone. This isn't used by the scene directly, but it is convenient
+    /// to compute it and store it here for submeshes to use when skinning.
+    inverse_bindpose: Mat4,
+    /// ALO visibility setting for the bone.
+    visible: bool,
+    /// Billboard mode of the bone.
+    billboard: BillboardMode,
+    /// Child bones of this bone.
+    children: Vec<AloBoneScene>,
+    /// Meshes which are attached to this bone.
+    meshes: Vec<AloMeshScene>,
+}
+
+impl Scene for AloBoneScene {
+    fn resolve(
+        self,
+        context: &mut ResolveContext,
+        scene: &mut ResolvedScene,
+    ) -> Result<(), ResolveSceneError> {
+        NameEntityReference {
+            name: Name(self.name.into()),
+            reference: SceneEntityReference::new(
+                AloScene::TYPE_ID,
+                self.bone_idx,
+                self.instance_id,
+            ),
+        }
+        .resolve_inline(context, scene);
+        let local_pos = self.transform.translation;
+        with_template!(scene, context, AloBone);
+        with_template!(scene, context, Transform, |trans| {
+            *trans = self.transform;
+        });
+        with_template!(scene, context, AloInitialVisibility, |aiv| {
+            aiv.hidden = !self.visible;
+        });
+        with_template!(scene, context, Visibility, |vis| {
+            *vis = if self.visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        });
+        resolve_billboard_mode(self.billboard, local_pos, context, scene);
+
+        let children = scene.get_or_insert_related_resolved_scenes::<ChildOf>();
+        self.children.resolve_list(context, &mut children.scenes)?;
+        self.meshes.resolve_list(context, &mut children.scenes)?;
+        Ok(())
+    }
+
+    fn register_dependencies(&self, deps: &mut SceneDependencies) {
+        self.children.register_dependencies(deps);
+        self.meshes.register_dependencies(deps);
+    }
+}
+/// Scene-like resolver that adds a bone's BillboardMode to the scene.
+fn resolve_billboard_mode(
+    mode: BillboardMode,
+    local_pos: Vec3,
+    context: &mut ResolveContext,
+    scene: &mut ResolvedScene,
+) {
+    match mode {
+        BillboardMode::Disable => {}
+        BillboardMode::Face | BillboardMode::Parallel => {
+            with_template!(scene, context, AloFaceCamera, |afc| {
+                *afc = AloFaceCamera {
+                    keep_vertical: false,
+                    local_offset: local_pos,
+                    rotate_around_parent: false,
+                }
+            })
+        }
+        BillboardMode::ZAxisView => {
+            with_template!(scene, context, AloFaceCamera, |afc| {
+                *afc = AloFaceCamera {
+                    keep_vertical: true,
+                    local_offset: local_pos,
+                    rotate_around_parent: false,
+                }
+            })
+        }
+        BillboardMode::SunlightGlow => {
+            with_template!(scene, context, AloFaceCamera, |afc| {
+                *afc = AloFaceCamera {
+                    keep_vertical: false,
+                    local_offset: local_pos,
+                    rotate_around_parent: true,
+                }
+            })
+        }
+        // TODO: support the rest of the billboard modes.
+        _ => {}
+    }
+}
+
+/// Scene representing a mesh in an Alo file.
+struct AloMeshScene {
+    /// Name of the mesh.
+    name: String,
+    /// Submeshes which compose this mesh.
+    submeshes: Vec<AloSubmeshScene>,
+    /// Hidden property from the Alo file.
+    hidden: bool,
+}
+
+impl Scene for AloMeshScene {
+    fn resolve(
+        self,
+        context: &mut ResolveContext,
+        scene: &mut ResolvedScene,
+    ) -> Result<(), ResolveSceneError> {
+        with_template!(scene, context, AloMesh);
+        with_template!(scene, context, Transform);
+        with_template!(scene, context, Name, |name| {
+            name.set(self.name);
+        });
+        with_template!(scene, context, AloInitialVisibility, |aiv| {
+            aiv.hidden = self.hidden;
+        });
+        with_template!(scene, context, Visibility, |vis| {
+            *vis = if self.hidden {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        });
+        let children = scene.get_or_insert_related_resolved_scenes::<ChildOf>();
+        self.submeshes.resolve_list(context, &mut children.scenes)?;
+        Ok(())
+    }
+
+    fn register_dependencies(&self, deps: &mut SceneDependencies) {
+        self.submeshes.register_dependencies(deps);
+    }
+}
+
+/// Material properties to apply to a submesh.
+struct SubmeshMaterialProperties {
+    /// Material to apply to this mesh.
+    material: Handle<AloMaterial>,
+    /// If false, this submesh should not cast shadows.
+    cast_shadows: bool,
+    /// Range of distances where this submesh is visible for LoD. If not set, don't use LoD.
+    visibility_range: Option<VisibilityRange>,
+}
+
+/// Holds the joint mapping for a skinned submesh.
+struct SubmeshJointMapping {
+    /// Inverse bindposes to use if this submesh is skinned.
+    inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
+    /// Numeric IDs of bones that this submesh uses as joints. These are the indexes within the
+    /// overall skeleton, not the relative indexes within the submesh's bone mapping list, so they
+    /// can be directly fed into SceneEntityReferences, since we assign scene entity references in
+    /// order starting with bones.
+    bones: Vec<usize>,
+}
+
+/// Scene which builds an ALO submesh.
+struct AloSubmeshScene {
+    /// Unique scene instance ID for the [`AloScene`] this submesh scene is a part of, used to link
+    /// bone entities for joints.
+    instance_id: u64,
+    /// The actual mesh for this submesh.
+    mesh: Handle<Mesh>,
+    /// Material to apply if this mesh is visible.
+    material_properties: Option<SubmeshMaterialProperties>,
+    /// Joint mapping for this submesh.
+    joints: Option<SubmeshJointMapping>,
+}
+
+impl Scene for AloSubmeshScene {
+    fn resolve(
+        self,
+        context: &mut ResolveContext,
+        scene: &mut ResolvedScene,
+    ) -> Result<(), ResolveSceneError> {
+        // Add the mesh.
+        with_template!(scene, context, Mesh3d, |mesh| {
+            mesh.0 = self.mesh.into();
+        });
+        with_template!(scene, context, Transform);
+        with_template!(scene, context, Visibility, |vis| {
+            *vis = Visibility::Inherited;
+        });
+
+        // Add materials if set.
+        if let Some(mat_props) = self.material_properties {
+            with_template!(scene, context, MeshMaterial3d<AloMaterial>, |mat| {
+                mat.0 = mat_props.material.into();
+            });
+            with_template!(scene, context, MeshTag, |tag| {
+                tag.0 = 0;
+            });
+            if !mat_props.cast_shadows {
+                with_template!(scene, context, NotShadowCaster);
+            }
+            // Configure LoD draw distances.
+            if let Some(visibility_range) = mat_props.visibility_range {
+                with_template!(scene, context, VisibilityRange, |vis_range| {
+                    *vis_range = visibility_range;
+                });
+            }
+        }
+
+        // Link to bones if skinning.
+        if let Some(joints) = self.joints {
+            with_template!(scene, context, SkinnedMesh, |skinned_mesh| {
+                skinned_mesh.inverse_bindposes = joints.inverse_bindposes.into();
+                skinned_mesh.joints.0 = joints
+                    .bones
+                    .into_iter()
+                    .map(|bone_idx| {
+                        EntityTemplate::from_reference(
+                            AloScene::TYPE_ID,
+                            bone_idx,
+                            self.instance_id,
+                        )
+                    })
+                    .collect();
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Mapping from a LodGroup and Lod level to a VisibilityRange to show that Lod at for that group.
+type LodMappings = HashMap<(LodGroup, Lod), VisibilityRange>;
 
 /// Loads ALO Models.
 #[derive(Default, TypePath)]
@@ -60,10 +396,220 @@ struct AloLoader {
     /// Each LOD starting being used when the camera is closer than this range, and stops being used
     /// in favor of a higher LOD if a higher LOD exists at whatever range the next LOD starts.
     lod_end_ranges: BTreeMap<Lod, Range<f32>>,
+    /// Path prefix to apply to texture names from the ALO file.
+    texture_path_prefix: Option<Arc<Path>>,
+}
+
+impl AloLoader {
+    /// Compute level of detail ranges for the given mesh.
+    fn compute_lods(&self, meshes: &[RawAloMesh]) -> Result<LodMappings, AloError> {
+        let mut lod_stack = HashMap::<LodGroup, Vec<Lod>>::new();
+        for mesh in meshes {
+            if let Some(lod) = mesh.lod {
+                lod_stack.entry(mesh.lod_group).or_default().push(lod);
+            }
+        }
+
+        let mut result = LodMappings::new();
+        for (group, mut lods) in lod_stack {
+            lods.sort();
+            for idx in 0..lods.len() {
+                // If the start range for this LOD doesn't exist, we never show it.
+                let Some(end_margin) = self.lod_end_ranges.get(&lods[idx]).cloned() else {
+                    return Err(AloError::UnknownLod {
+                        group,
+                        lod: lods[idx],
+                    });
+                };
+                // End at the start of the next LOD or 0 if this is the highest LOD.
+                let start_margin = lods
+                    .get(idx + 1)
+                    .and_then(|lod| self.lod_end_ranges.get(lod))
+                    .cloned()
+                    .unwrap_or(0.0..0.0);
+                let already_inserted = result
+                    .insert(
+                        (group, lods[idx]),
+                        VisibilityRange {
+                            start_margin,
+                            end_margin,
+                            use_aabb: false,
+                        },
+                    )
+                    .is_some();
+                if already_inserted {
+                    return Err(AloError::DuplicateLod {
+                        group,
+                        lod: lods[idx],
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Converts each ALO mesh into a scene and attaches it to the correct parent bone's scene.
+    fn create_mesh_scenes(
+        &self,
+        load_context: &mut LoadContext<'_>,
+        instance_id: u64,
+        meshes: Vec<RawAloMesh>,
+        bones: &mut [AloBoneScene],
+    ) -> Result<(), AloError> {
+        let mut lod_mappings = self.compute_lods(&meshes)?;
+        for (mesh_idx, mesh) in meshes.into_iter().enumerate() {
+            let vis_range = match mesh.lod {
+                Some(lod) => match lod_mappings.remove(&(mesh.lod_group, lod)) {
+                    Some(vis_range) => Some(vis_range),
+                    None => {
+                        return Err(AloError::UnknownLod {
+                            group: mesh.lod_group,
+                            lod,
+                        });
+                    }
+                },
+                // If the mesh has no LOD setting, don't use a visibility range.
+                None => None,
+            };
+            let name = make_ascii_uppercase(mesh.name);
+
+            let submeshes = self.create_submesh_scenes(
+                load_context,
+                instance_id,
+                mesh_idx,
+                vis_range.as_ref(),
+                SpecialNameCategory::categorize(&name),
+                mesh.submeshes,
+                bones,
+            )?;
+
+            let bone = match bones.get_mut(mesh.parent_bone) {
+                Some(bone) => bone,
+                None => {
+                    return Err(AloError::InvalidParentIndex {
+                        category: "Mesh",
+                        item_idx: mesh_idx,
+                        parent_idx: mesh.parent_bone,
+                    });
+                }
+            };
+            bone.meshes.push(AloMeshScene {
+                hidden: mesh.hidden,
+                name,
+                submeshes,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Converts eash ALO submesh into a scene.
+    fn create_submesh_scenes(
+        &self,
+        load_context: &mut LoadContext<'_>,
+        instance_id: u64,
+        mesh_idx: usize,
+        vis_range: Option<&VisibilityRange>,
+        category: SpecialNameCategory,
+        submeshes: Vec<Submesh>,
+        bones: &[AloBoneScene],
+    ) -> Result<Vec<AloSubmeshScene>, AloError> {
+        let mut res = Vec::with_capacity(submeshes.len());
+        for (submesh_idx, mut submesh) in submeshes.into_iter().enumerate() {
+            self.preprocess_texture_paths(&mut submesh);
+            let mesh = build_submesh_mesh(
+                submesh.vertex_format,
+                submesh.primitives,
+                submesh.vertex_data,
+            );
+            let mesh = load_context.add_labeled_asset(
+                AloAssetLabel::Submesh {
+                    mesh_idx,
+                    submesh_idx,
+                }
+                .to_string(),
+                mesh,
+            );
+
+            let material = build_submesh_material(
+                submesh.shader,
+                self.team_colors_buffer.clone(),
+                load_context,
+            )?;
+            let material = material.map(|material| {
+                load_context.add_labeled_asset(
+                    AloAssetLabel::SubmeshMaterial {
+                        mesh_idx,
+                        submesh_idx,
+                    }
+                    .to_string(),
+                    material,
+                )
+            });
+            let material_properties = material.map(|material| SubmeshMaterialProperties {
+                material,
+                cast_shadows: category != SpecialNameCategory::Blast,
+                visibility_range: vis_range.cloned(),
+            });
+
+            let joints = if submesh.vertex_format.contains(VertexFormat::Bones) {
+                let mut inverse_bindposes = Vec::with_capacity(submesh.bone_mappings.len());
+                for &mapping in &submesh.bone_mappings {
+                    // We trust that this is in range because petro-alo validates it for us.
+                    inverse_bindposes.push(bones[mapping].inverse_bindpose);
+                }
+                let inverse_bindposes = load_context.add_labeled_asset(
+                    AloAssetLabel::SubmeshInverseBindposes {
+                        mesh_idx,
+                        submesh_idx,
+                    }
+                    .to_string(),
+                    SkinnedMeshInverseBindposes::from(inverse_bindposes),
+                );
+
+                Some(SubmeshJointMapping {
+                    inverse_bindposes,
+                    // This is already checked to be in-range by petro-alo library.
+                    bones: submesh.bone_mappings,
+                })
+            } else {
+                None
+            };
+
+            res.push(AloSubmeshScene {
+                instance_id,
+                mesh,
+                material_properties,
+                joints,
+            });
+        }
+        Ok(res)
+    }
+
+    /// Downcases any texture names in the submesh's shader params and prepends the texture path
+    /// prefix. It also changes the extension to `.dds` or adds `.dds` if no extension is set, to
+    /// match the compiled texture format.
+    fn preprocess_texture_paths(&self, submesh: &mut Submesh) {
+        for param in submesh.shader.params.values_mut() {
+            if let ShaderParam::Texture(tex) = param {
+                // ShaderParms were written assuming case-insensitive paths. For
+                // cross-platform compatibility we downcase for consistency. This matches
+                // what baw-asset-extractor does.
+                tex.as_mut_os_str().make_ascii_lowercase();
+                // If there is a path prefix to apply, prepend it before the current path.
+                if let Some(prefix) = &self.texture_path_prefix {
+                    let mut path = prefix.to_path_buf();
+                    path.push(&tex);
+                    *tex = path;
+                }
+                tex.set_extension("dds");
+            }
+        }
+    }
 }
 
 impl AssetLoader for AloLoader {
-    type Asset = WorldAsset;
+    type Asset = ScenePatch;
     type Error = AloError;
     type Settings = ();
 
@@ -76,212 +622,138 @@ impl AssetLoader for AloLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let file = AloFile::parse(&bytes)?;
-        let mut world = World::default();
+        let mut scene = AloScene::new();
 
-        let bevy_to_alo = ALO_TO_BEVY.inverse();
-        let mut inverse_bindposes = Vec::with_capacity(file.skeleton.bones.len());
-        let mut bones = Vec::with_capacity(file.skeleton.bones.len());
-        for bone in file.skeleton.bones {
-            // To convert a matrix from alo to bevy, we create a matrix which first transforms
-            // from bevy space to alo space, then performs the transform in alo space, then
-            // transforms back to bevy space.
-            let transform =
-                Transform::from_matrix(ALO_TO_BEVY * bone.local_to_parent * bevy_to_alo);
-            let local_pos = transform.translation;
-            let mut bone_builder = world.spawn((
-                AloBone,
-                transform,
-                Name::new(make_ascii_uppercase(bone.name)),
-                AloInitialVisibility {
-                    hidden: !bone.visible,
-                },
-                if bone.visible {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                },
-            ));
-            match bone.billboard {
-                BillboardMode::Disable => {}
-                BillboardMode::Face | BillboardMode::Parallel => {
-                    bone_builder.insert(AloFaceCamera {
-                        keep_vertical: false,
-                        local_offset: local_pos,
-                        rotate_around_parent: false,
-                    });
-                }
-                BillboardMode::ZAxisView => {
-                    bone_builder.insert(AloFaceCamera {
-                        keep_vertical: true,
-                        local_offset: local_pos,
-                        rotate_around_parent: false,
-                    });
-                }
-                BillboardMode::SunlightGlow => {
-                    bone_builder.insert(AloFaceCamera {
-                        keep_vertical: false,
-                        local_offset: local_pos,
-                        rotate_around_parent: true,
-                    });
-                }
-                // TODO: support the rest of the billboard modes.
-                _ => {}
-            }
-            if let Some(parent) = bone.parent {
-                bone_builder.insert(ChildOf(bones[parent]));
-            }
-            bones.push(bone_builder.id());
-            inverse_bindposes.push((ALO_TO_BEVY * bone.local_to_global * bevy_to_alo).inverse());
-        }
+        let mut bones = bones_to_scenes(scene.instance_id, file.skeleton);
+        self.create_mesh_scenes(load_context, scene.instance_id, file.meshes, &mut bones)?;
 
-        let mut lods = compute_lods(&file.meshes, &self.lod_end_ranges)?;
-        let mut meshes = Vec::with_capacity(file.meshes.len());
-        for (mesh_idx, mesh) in file.meshes.into_iter().enumerate() {
-            println!("{}", mesh.name);
-            let vis_range = match mesh.lod.map(|lod| lods.remove(&(mesh.lod_group, lod))) {
-                // If the mesh has a LOD but there's no visibility range for that LOD level, skip
-                // the whole mesh.
-                Some(None) => continue,
-                Some(Some(range)) => Some(range),
-                // If the mesh has no LOD setting, don't use a visibility range.
-                None => None,
-            };
-            let mesh_name = make_ascii_uppercase(mesh.name);
-            let name_category = SpecialNameCategory::categorize(&mesh_name);
-            let mesh_id = {
-                let mut mesh_builder = world.spawn((
-                    AloMesh,
-                    Transform::IDENTITY,
-                    Name::new(mesh_name),
-                    AloInitialVisibility {
-                        hidden: mesh.hidden,
-                    },
-                    if mesh.hidden {
-                        Visibility::Hidden
-                    } else {
-                        Visibility::Inherited
-                    },
-                ));
-                if let Some(bone_idx) = mesh.parent_bone {
-                    mesh_builder.insert(ChildOf(bones[bone_idx]));
-                }
-                mesh_builder.id()
-            };
-            for (submesh_idx, submesh) in mesh.submeshes.into_iter().enumerate() {
-                let mut msh = Mesh::new(
-                    PrimitiveTopology::TriangleList,
-                    // We have to retain all meshes on the CPU side because we dn't know which will
-                    // be needed for features like collision detection, as that is configured later.
-                    RenderAssetUsages::all(),
-                );
-                println!("    {:?}", submesh.vertex_format);
-                msh.insert_indices(Indices::U16(cast_vec(submesh.primitives)));
-                if submesh.vertex_format.contains(VertexFormat::Positions) {
-                    msh.insert_attribute(Mesh::ATTRIBUTE_POSITION, alo_to_bevy(submesh.positions));
-                }
-                if submesh
-                    .vertex_format
-                    .intersects(VertexFormat::Normals | VertexFormat::TangentBinormals)
-                {
-                    let normals = alo_to_bevy(submesh.normals);
-                    if submesh
-                        .vertex_format
-                        .contains(VertexFormat::TangentBinormals)
-                    {
-                        let tangents = combine_tangents(
-                            &normals,
-                            &alo_to_bevy(submesh.tangents),
-                            &alo_to_bevy(submesh.binormals),
-                        );
-                        msh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
-                    }
-                    if submesh.vertex_format.contains(VertexFormat::Normals) {
-                        msh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-                    }
-                }
-                if submesh.vertex_format.contains(VertexFormat::TexCoords) {
-                    let [uv0, uv1, _, _] = submesh.tex_coords;
-                    msh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
-                    msh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
-                }
-                if submesh.vertex_format.contains(VertexFormat::Colors) {
-                    msh.insert_attribute(Mesh::ATTRIBUTE_COLOR, submesh.colors);
-                }
-                if submesh.vertex_format.contains(VertexFormat::Bones) {
-                    msh.insert_attribute(
-                        Mesh::ATTRIBUTE_JOINT_INDEX,
-                        VertexAttributeValues::Uint16x4(submesh.bone_indices),
-                    );
-                    msh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, submesh.bone_weights);
-                }
+        scene.root_bone = flat_bones_to_tree(bones)?;
 
-                let msh = load_context.add_labeled_asset(
-                    AloAssetLabel::Submesh {
-                        mesh_idx,
-                        submesh_idx,
-                    }
-                    .to_string(),
-                    msh,
-                );
-
-               let mut submesh_builder = world.spawn((
-                    Mesh3d(msh),
-                    Transform::IDENTITY,
-                    ChildOf(mesh_id),
-                    Visibility::Inherited,
-                ));
-
-                let material = build_submesh_material(
-                    submesh.shader,
-                    self.team_colors_buffer.clone(),
-                    load_context,
-                )?;
-                if let Some(material) = material {
-                    let material_label = AloAssetLabel::SubmeshMaterial {
-                        mesh_idx,
-                        submesh_idx,
-                    };
-                    let material =
-                        load_context.add_labeled_asset(material_label.to_string(), material);
-                    submesh_builder.insert((MeshMaterial3d(material), MeshTag(0)));
-                    if name_category == SpecialNameCategory::Blast {
-                        submesh_builder.insert(NotShadowCaster);
-                    }
-                    if let Some(ref vis_range) = vis_range {
-                        submesh_builder.insert(vis_range.clone());
-                    }
-                    if submesh.vertex_format.contains(VertexFormat::Bones) {
-                        let mut submesh_inverse_bindposes =
-                            Vec::with_capacity(submesh.bone_mappings.len());
-                        let mut joints = Vec::with_capacity(submesh.bone_mappings.len());
-                        for mapping in submesh.bone_mappings {
-                            submesh_inverse_bindposes.push(inverse_bindposes[mapping]);
-                            joints.push(bones[mapping]);
-                        }
-                        let inverse_bindposes = load_context.add_labeled_asset(
-                            AloAssetLabel::SubmeshInverseBindposes {
-                                mesh_idx,
-                                submesh_idx,
-                            }
-                            .to_string(),
-                            SkinnedMeshInverseBindposes::from(submesh_inverse_bindposes),
-                        );
-                        submesh_builder.insert(SkinnedMesh {
-                            inverse_bindposes,
-                            joints,
-                        });
-                    }
-                }
-            }
-            meshes.push(mesh_id);
-        }
-
-        Ok(WorldAsset { world })
+        return Ok(ScenePatch::load_with(load_context, scene));
     }
 
     fn extensions(&self) -> &[&str] {
         &["alo"]
     }
+}
+
+/// Converts the skeleton's list of bones into a flat list of empty bone scenes in the same order.
+/// Does not build the parenting tree.
+///
+/// * `instance_id`: Unique instance id of the [AloScene] this bone is part of.
+/// * `skeleton`: the [Skeleton] to build into a scene.
+fn bones_to_scenes(instance_id: u64, skeleton: Skeleton) -> Vec<AloBoneScene> {
+    let bevy_to_alo = ALO_TO_BEVY.inverse();
+    // Iterate in reverse so we can insert each bone into the child collector for the previous.
+    skeleton
+        .bones
+        .into_iter()
+        .enumerate()
+        .map(|(bone_idx, bone)| {
+            let name = make_ascii_uppercase(bone.name);
+            // To convert a matrix from alo to bevy, we create a matrix which first transforms
+            // from bevy space to alo space, then performs the transform in alo space, then
+            // transforms back to bevy space.
+            let transform =
+                Transform::from_matrix(ALO_TO_BEVY * bone.local_to_parent * bevy_to_alo);
+            let inverse_bindpose = (ALO_TO_BEVY * bone.local_to_global * bevy_to_alo).inverse();
+            AloBoneScene {
+                instance_id,
+                bone_idx,
+                parent_idx: bone.parent,
+                name,
+                transform,
+                inverse_bindpose,
+                visible: bone.visible,
+                billboard: bone.billboard,
+                // Children of this bone will be filled in later.
+                children: Vec::new(),
+                meshes: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Converts a vector of ALO bones into a tree of bone scenes.
+///
+/// This assumes the bones in the list have the same properties as are expected in an ALO file:
+/// -   The root bone is first
+/// -   All bones come after their parents (all parent references point to lower indexes in the
+///     vector).
+/// -   All bones besides the root have a parent.
+fn flat_bones_to_tree(mut bones: Vec<AloBoneScene>) -> Result<Option<AloBoneScene>, AloError> {
+    while let Some(bone) = bones.pop() {
+        debug_assert!(bone.bone_idx == bones.len());
+        match bone.parent_idx {
+            Some(parent_idx) => match bones.get_mut(parent_idx) {
+                Some(parent) => parent.children.push(bone),
+                None => {
+                    return Err(AloError::InvalidParentIndex {
+                        category: "Bone",
+                        item_idx: bone.bone_idx,
+                        parent_idx,
+                    });
+                }
+            },
+            // This bone is the root, we are done collecting.
+            None if bone.bone_idx == 0 => return Ok(Some(bone)),
+            None => {
+                return Err(AloError::MissingParent {
+                    bone_idx: bone.bone_idx,
+                });
+            }
+        }
+    }
+    // If the list was initially empty, then there is no root bone.
+    Ok(None)
+}
+
+/// Build the mesh for a submesh.
+fn build_submesh_mesh(
+    vertex_format: VertexFormat,
+    index_buffer: Vec<[u16; 3]>,
+    vertex_data: SubmeshVertexData,
+) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        // We have to retain all meshes on the CPU side because we dn't know which will
+        // be needed for features like collision detection, as that is configured later.
+        RenderAssetUsages::all(),
+    );
+    mesh.insert_indices(Indices::U16(cast_vec(index_buffer)));
+    if vertex_format.contains(VertexFormat::Positions) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, alo_to_bevy(vertex_data.positions));
+    }
+    if vertex_format.intersects(VertexFormat::Normals | VertexFormat::TangentBinormals) {
+        let normals = alo_to_bevy(vertex_data.normals);
+        if vertex_format.contains(VertexFormat::TangentBinormals) {
+            let tangents = combine_tangents(
+                &normals,
+                &alo_to_bevy(vertex_data.tangents),
+                &alo_to_bevy(vertex_data.binormals),
+            );
+            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
+        }
+        if vertex_format.contains(VertexFormat::Normals) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        }
+    }
+    if vertex_format.contains(VertexFormat::TexCoords) {
+        let [uv0, uv1, _, _] = vertex_data.tex_coords;
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+    }
+    if vertex_format.contains(VertexFormat::Colors) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_data.colors);
+    }
+    if vertex_format.contains(VertexFormat::Bones) {
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(vertex_data.bone_indices),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vertex_data.bone_weights);
+    }
+    mesh
 }
 
 fn combine_tangents(norms: &[[f32; 3]], tans: &[[f32; 3]], binorms: &[[f32; 3]]) -> Vec<[f32; 4]> {
@@ -309,7 +781,7 @@ macro_rules! expect_shader_param {
             Some(other) => {
                 return Err(AloError::UnexpectedShaderValueType {
                     param: $name,
-                    value: other,
+                    value_type: shader_param_type_name(&other),
                     expected: stringify!($ty),
                 })
             }
@@ -318,7 +790,20 @@ macro_rules! expect_shader_param {
     };
 }
 
+/// Gets the name of a shader param type.
+fn shader_param_type_name(param: &ShaderParam) -> &'static str {
+    match param {
+        ShaderParam::Int(_) => "Int",
+        ShaderParam::Float(_) => "Float",
+        ShaderParam::Float3(_) => "Float3",
+        ShaderParam::Texture(_) => "Texture",
+        ShaderParam::Float4(_) => "Float4",
+    }
+}
+
 /// Convert an ALO shader to a Bevy material (within reason).
+///
+/// This will destructively take the shader parameters leaving the parameter map empty.
 fn build_submesh_material(
     mut shader: AloShader,
     team_colors: Handle<ShaderBuffer>,
@@ -326,10 +811,6 @@ fn build_submesh_material(
 ) -> Result<Option<AloMaterial>, AloError> {
     let mut base = StandardMaterial::default();
     let mut extension = AloMaterialExtension::new(team_colors);
-    println!("    {}", shader.filename);
-    for (name, param) in &shader.params {
-        println!("        {name} {param:?}");
-    }
     match &*shader.filename {
         "MeshCollision.fx" | "MeshShadowVolume.fx" | "RSkinShadowVolume.fx" => return Ok(None),
         "MeshAlpha.fx" => {
@@ -396,16 +877,11 @@ fn build_submesh_material(
     Ok(Some(ExtendedMaterial { base, extension }))
 }
 
-fn load_alo_texture(
+fn load_alo_texture<'a>(
     load_context: &mut LoadContext<'_>,
-    mut tex_name: String,
+    path: PathBuf,
     is_srgb: bool,
 ) -> Handle<Image> {
-    let mut path = PathBuf::from("extracted");
-    path.push("textures");
-    tex_name.make_ascii_lowercase();
-    path.push(tex_name);
-    path.set_extension("dds");
     load_context
         .load_builder()
         .with_settings(move |settings: &mut ImageLoaderSettings| {
@@ -417,53 +893,6 @@ fn load_alo_texture(
             });
         })
         .load(path)
-}
-
-/// Compute level of detail ranges for the given mesh.
-fn compute_lods(
-    meshes: &[RawAloMesh],
-    lod_end_ranges: &BTreeMap<Lod, Range<f32>>,
-) -> Result<HashMap<(LodGroup, Lod), VisibilityRange>, AloError> {
-    let mut lod_stack = HashMap::<LodGroup, Vec<Lod>>::new();
-    for mesh in meshes {
-        if let Some(lod) = mesh.lod {
-            lod_stack.entry(mesh.lod_group).or_default().push(lod);
-        }
-    }
-
-    let mut result = HashMap::new();
-    for (group, mut lods) in lod_stack {
-        lods.sort();
-        for idx in 0..lods.len() {
-            // If the start range for this LOD doesn't exist, we never show it.
-            let Some(end_margin) = lod_end_ranges.get(&lods[idx]).cloned() else {
-                continue;
-            };
-            // End at the start of the next LOD or 0 if this is the highest LOD.
-            let start_margin = lods
-                .get(idx + 1)
-                .and_then(|lod| lod_end_ranges.get(lod))
-                .cloned()
-                .unwrap_or(0.0..0.0);
-            let already_inserted = result
-                .insert(
-                    (group, lods[idx]),
-                    VisibilityRange {
-                        start_margin,
-                        end_margin,
-                        use_aabb: false,
-                    },
-                )
-                .is_some();
-            if already_inserted {
-                return Err(AloError::DuplicateLod {
-                    group,
-                    lod: lods[idx],
-                });
-            }
-        }
-    }
-    Ok(result)
 }
 
 /// Indicates if the mesh name contains text that indicates it should be treated specially.

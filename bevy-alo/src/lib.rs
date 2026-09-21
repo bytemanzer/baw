@@ -1,3 +1,7 @@
+use std::path::Path;
+use std::sync::Arc;
+
+use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 
 pub use error::AloError;
@@ -7,22 +11,42 @@ use crate::components::AloComponentsPlugin;
 use crate::materials::AloMaterialsPlugin;
 use crate::models::AloModelsPlugin;
 
+pub mod animations;
 pub mod billboard;
 pub mod components;
 mod error;
 pub mod labels;
 pub mod materials;
 pub mod models;
-pub mod animations;
 
 /// Plugin which adds the ALO asset loader.
-pub struct AloPlugin;
+#[derive(Default, Clone)]
+pub struct AloPlugins {
+    models_plugin: AloModelsPlugin,
+}
 
-impl Plugin for AloPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins((AloMaterialsPlugin, AloComponentsPlugin))
-            .add_plugins(AloModelsPlugin)
-            .add_plugins(AloBillboardPlugin);
+impl AloPlugins {
+    /// Create a new AloPlugin with no path prefixes set.
+    pub const fn new() -> Self {
+        Self {
+            models_plugin: AloModelsPlugin::new(),
+        }
+    }
+
+    /// Sets the prefix to prepend to texture paths in ALO model files.
+    pub fn with_texture_path_prefix(mut self, prefix: impl Into<Arc<Path>>) -> Self {
+        self.models_plugin.set_texture_path_prefix(prefix);
+        self
+    }
+}
+
+impl PluginGroup for AloPlugins {
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(AloMaterialsPlugin)
+            .add(AloComponentsPlugin)
+            .add(self.models_plugin)
+            .add(AloBillboardPlugin)
     }
 }
 
