@@ -76,3 +76,5 @@ bevy_utils = { git = "https://github.com/zstewar1/bevy.git", branch = "0.19.1-pa
 bevy_window = { git = "https://github.com/zstewar1/bevy.git", branch = "0.19.1-patch" }
 bevy_winit = { git = "https://github.com/zstewar1/bevy.git", branch = "0.19.1-patch" }
 bevy_world_serialization = { git = "https://github.com/zstewar1/bevy.git", branch = "0.19.1-patch" }
+
+petro-meg = { git = "https://github.com/zstewar1/petro-meg.git", branch = "improved-path" }
