@@ -1,19 +1,18 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
+use baw_scene_util::{SceneTypeId, scene_type_id, with_template};
+use bevy::asset::io::Reader;
+use bevy::asset::{AssetLoader, AssetPath, LoadContext, RenderAssetUsages};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::ecs::template::{EntityTemplate, SceneEntityReference};
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
-use bevy::pbr::ExtendedMaterial;
-use bevy::prelude::*;
-
-use bevy::asset::io::Reader;
-use bevy::asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
+use bevy::pbr::ExtendedMaterial;
+use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use bevy::scene::macro_utils::CallCounter;
 use bevy::scene::{
@@ -28,7 +27,7 @@ use petro_alo::mesh::{
     Mesh as RawAloMesh, Shader as AloShader, ShaderParam, Submesh, SubmeshVertexData, VertexFormat,
 };
 use petro_alo::skeleton::{BillboardMode, Skeleton};
-use baw_scene_util::{scene_type_id, with_template, SceneTypeId};
+use serde::{Deserialize, Serialize};
 
 use crate::components::{AloBone, AloFaceCamera, AloInitialVisibility, AloMesh};
 use crate::labels::AloAssetLabel;
@@ -37,22 +36,13 @@ use crate::{ALO_TO_BEVY, AloError, alo_to_bevy};
 
 #[derive(Default, Clone)]
 pub struct AloModelsPlugin {
-    /// Path prefix to insert in front of ALO texture file names.
-    texture_path_prefix: Option<Arc<Path>>,
+    _private: (),
 }
 
 impl AloModelsPlugin {
     /// Create a new AloModelsPlugin with no path prefixes set.
     pub const fn new() -> Self {
-        Self {
-            texture_path_prefix: None,
-        }
-    }
-
-    /// Sets the prefix to prepend to texture paths in ALO model files.
-    pub fn set_texture_path_prefix(&mut self, prefix: impl Into<Arc<Path>>) -> &mut Self {
-        self.texture_path_prefix = Some(prefix.into());
-        self
+        Self { _private: () }
     }
 }
 
@@ -76,7 +66,6 @@ impl Plugin for AloModelsPlugin {
                 ranges.insert(Lod(5), 9.0..10.0);
                 ranges
             },
-            texture_path_prefix: self.texture_path_prefix.clone(),
         });
     }
 }
@@ -375,8 +364,6 @@ struct AloLoader {
     /// Each LOD starting being used when the camera is closer than this range, and stops being used
     /// in favor of a higher LOD if a higher LOD exists at whatever range the next LOD starts.
     lod_end_ranges: BTreeMap<Lod, Range<f32>>,
-    /// Path prefix to apply to texture names from the ALO file.
-    texture_path_prefix: Option<Arc<Path>>,
 }
 
 impl AloLoader {
@@ -431,6 +418,7 @@ impl AloLoader {
     fn create_mesh_scenes(
         &self,
         load_context: &mut LoadContext<'_>,
+        settings: &AloMeta,
         instance_id: u64,
         meshes: Vec<RawAloMesh>,
         bones: &mut [AloBoneScene],
@@ -454,6 +442,7 @@ impl AloLoader {
 
             let submeshes = self.create_submesh_scenes(
                 load_context,
+                settings,
                 instance_id,
                 mesh_idx,
                 vis_range.as_ref(),
@@ -486,6 +475,7 @@ impl AloLoader {
     fn create_submesh_scenes(
         &self,
         load_context: &mut LoadContext<'_>,
+        settings: &AloMeta,
         instance_id: u64,
         mesh_idx: usize,
         vis_range: Option<&VisibilityRange>,
@@ -494,8 +484,7 @@ impl AloLoader {
         bones: &[AloBoneScene],
     ) -> Result<Vec<AloSubmeshScene>, AloError> {
         let mut res = Vec::with_capacity(submeshes.len());
-        for (submesh_idx, mut submesh) in submeshes.into_iter().enumerate() {
-            self.preprocess_texture_paths(&mut submesh);
+        for (submesh_idx, submesh) in submeshes.into_iter().enumerate() {
             let mesh = build_submesh_mesh(
                 submesh.vertex_format,
                 submesh.primitives,
@@ -511,9 +500,10 @@ impl AloLoader {
             );
 
             let material = build_submesh_material(
+                load_context,
+                settings,
                 submesh.shader,
                 self.team_colors_buffer.clone(),
-                load_context,
             )?;
             let material = material.map(|material| {
                 load_context.add_labeled_asset(
@@ -564,38 +554,32 @@ impl AloLoader {
         }
         Ok(res)
     }
+}
 
-    /// Downcases any texture names in the submesh's shader params and prepends the texture path
-    /// prefix. It also changes the extension to `.dds` or adds `.dds` if no extension is set, to
-    /// match the compiled texture format.
-    fn preprocess_texture_paths(&self, submesh: &mut Submesh) {
-        for param in submesh.shader.params.values_mut() {
-            if let ShaderParam::Texture(tex) = param {
-                // ShaderParms were written assuming case-insensitive paths. For
-                // cross-platform compatibility we downcase for consistency. This matches
-                // what baw-asset-extractor does.
-                tex.as_mut_os_str().make_ascii_lowercase();
-                // If there is a path prefix to apply, prepend it before the current path.
-                if let Some(prefix) = &self.texture_path_prefix {
-                    let mut path = prefix.to_path_buf();
-                    path.push(&tex);
-                    *tex = path;
-                }
-                tex.set_extension("dds");
-            }
-        }
+/// Metadata settings for an individual ALO model load.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AloMeta {
+    /// Mapping from texture names as they appear in the model file to asset paths to use for those
+    /// textures. Any texture not mapped here will try to use the original path from the model file.
+    pub texture_mapping: BTreeMap<PathBuf, AssetPath<'static>>,
+}
+
+impl AloMeta {
+    /// Create a new empty [`AloMeta`] with no mappings.
+    pub fn new() -> Self {
+        Default::default()
     }
 }
 
 impl AssetLoader for AloLoader {
     type Asset = ScenePatch;
     type Error = AloError;
-    type Settings = ();
+    type Settings = AloMeta;
 
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
@@ -604,7 +588,13 @@ impl AssetLoader for AloLoader {
         let mut scene = AloScene::new();
 
         let mut bones = bones_to_scenes(scene.instance_id, file.skeleton);
-        self.create_mesh_scenes(load_context, scene.instance_id, file.meshes, &mut bones)?;
+        self.create_mesh_scenes(
+            load_context,
+            settings,
+            scene.instance_id,
+            file.meshes,
+            &mut bones,
+        )?;
 
         scene.root_bone = flat_bones_to_tree(bones)?;
 
@@ -784,9 +774,10 @@ fn shader_param_type_name(param: &ShaderParam) -> &'static str {
 ///
 /// This will destructively take the shader parameters leaving the parameter map empty.
 fn build_submesh_material(
+    load_context: &mut LoadContext<'_>,
+    settings: &AloMeta,
     mut shader: AloShader,
     team_colors: Handle<ShaderBuffer>,
-    load_context: &mut LoadContext<'_>,
 ) -> Result<Option<AloMaterial>, AloError> {
     let mut base = StandardMaterial::default();
     let mut extension = AloMaterialExtension::new(team_colors);
@@ -841,15 +832,15 @@ fn build_submesh_material(
         base.base_color = Srgba::from_f32_array_no_alpha(color).into();
     }
     if let Some(tex) = expect_shader_param!(shader, "BaseTexture", Texture) {
-        let tex = load_alo_texture(load_context, tex, true);
+        let tex = load_alo_texture(load_context, settings, tex, true);
         base.base_color_texture = Some(tex);
     }
     if let Some(tex) = expect_shader_param!(shader, "NormalTexture", Texture) {
-        let tex = load_alo_texture(load_context, tex, false);
+        let tex = load_alo_texture(load_context, settings, tex, false);
         base.normal_map_texture = Some(tex);
     }
     if let Some(tex) = expect_shader_param!(shader, "GlossTexture", Texture) {
-        let tex = load_alo_texture(load_context, tex, false);
+        let tex = load_alo_texture(load_context, settings, tex, false);
         extension.gloss_texture = Some(tex);
     }
 
@@ -858,9 +849,14 @@ fn build_submesh_material(
 
 fn load_alo_texture<'a>(
     load_context: &mut LoadContext<'_>,
+    settings: &AloMeta,
     path: PathBuf,
     is_srgb: bool,
 ) -> Handle<Image> {
+    let asset_path = match settings.texture_mapping.get(&path) {
+        Some(asset_path) => asset_path.clone(),
+        None => AssetPath::from(path),
+    };
     load_context
         .load_builder()
         .with_settings(move |settings: &mut ImageLoaderSettings| {
@@ -871,7 +867,7 @@ fn load_alo_texture<'a>(
                 ..ImageSamplerDescriptor::linear()
             });
         })
-        .load(path)
+        .load(asset_path)
 }
 
 /// Indicates if the mesh name contains text that indicates it should be treated specially.

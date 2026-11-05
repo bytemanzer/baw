@@ -119,7 +119,7 @@ dependencies = [
 [[package]]
 name = "ain"
 version = "0.2.0"
-source = "git+https://github.com/zstewar1/ain.git?branch=dev#0fe9217cc4ad8a1b5432c9afebda10e0b0291517"
+source = "git+https://github.com/zstewar1/ain.git?branch=dev#9c58923eafb9ab3c8b98f7be2ecdabe0efd40784"
 dependencies = [
  "ascii",
  "memchr",
@@ -555,8 +555,11 @@ version = "0.1.0"
 dependencies = [
  "ain",
  "anyhow",
+ "bevy",
+ "bevy-alo",
  "easy-parallel",
  "encoding_rs",
+ "petro-alo",
  "petro-meg",
  "quick-xml 0.42.0",
  "ron",
@@ -602,6 +605,7 @@ dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
  "petro-alo",
+ "serde",
  "thiserror 2.0.20",
 ]
 
@@ -4750,7 +4754,7 @@ dependencies = [
 [[package]]
 name = "petro-meg"
 version = "1.1.0"
-source = "git+https://github.com/zstewar1/petro-meg.git?branch=improved-path#8e2a830a895400187f2e4d66af6973711180b4ba"
+source = "git+https://github.com/zstewar1/petro-meg.git?branch=improved-path#182019a1f6302150b1f1fa6b4f48ccc1c8d85e9c"
 dependencies = [
  "ain",
  "byteorder",

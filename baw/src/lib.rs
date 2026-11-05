@@ -30,7 +30,7 @@ impl Plugin for BawPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             DefaultPlugins,
-            AloPlugins::new().with_texture_path_prefix(Path::new("extracted/textures")),
+            AloPlugins::new(),
             PanOrbitCameraPlugin,
             BawPhysicsPlugins::new(),
             UnitsPlugin,

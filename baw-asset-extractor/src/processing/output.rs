@@ -1,85 +1,14 @@
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 use anyhow::{Context as _, bail};
-use petro_meg::path::MegPath;
+use serde::Serialize;
 use tracing::info;
 
 use crate::assets::Asset;
-
-/// How a destination path was written.
-enum WriteType<'a> {
-    AssetCopy { source: &'a MegPath },
-}
-
-impl<'a> WriteType<'a> {
-    /// Checks if an existing write type is compatible with this one.
-    fn check_compatibility(&self, existing: &WriteType<'_>, dest: &Path) -> anyhow::Result<()> {
-        match (self, existing) {
-            (WriteType::AssetCopy { source }, WriteType::AssetCopy { source: existing }) => {
-                if source != existing {
-                    bail!(
-                        "Cannot copy {source} to {}, because it was already copied from {existing}",
-                        dest.display()
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Current state of an output file, which determines if an action
-#[derive(Default)]
-enum ExistingFileState {
-    /// We have not checked for an existing file yet.
-    #[default]
-    NotChecked,
-    /// There was not an existing output file, so it should be written.
-    Missing,
-    /// There was an existing output file, but it was older than the source, so it should be
-    /// written.
-    OlderThanSource,
-    /// There was an existing output file, but it was older than the generator that produces it, so
-    /// it should be written.
-    OlderThanGenerator,
-    /// There was an existing output file, and it was newer than the source and/or generator, so it
-    /// should not be written.
-    UpToDate,
-}
-
-/// Records information about an output file.
-struct OutputFile<'a> {
-    /// Which type of write created the file on this run.
-    write_type: WriteType<'a>,
-    /// Records the state that the output file was in the first time it was handled by the
-    /// [FileWriter]. None if the output state hasn't been determined yet.
-    existing_file: ExistingFileState,
-}
-
-impl<'a> OutputFile<'a> {
-    /// Create an OutputFile writer.
-    fn new(write_type: WriteType<'a>) -> Self {
-        Self {
-            write_type,
-            existing_file: ExistingFileState::NotChecked,
-        }
-    }
-}
-
-/// Configures how the Output system checks for existing files.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ExistingFileHandling {
-    /// Do not check for existing files. Write all files to output even if they already exist.
-    WriteAll,
-    /// If the outpuf file is newer than the source, skip writing it.
-    SkipIfNewer,
-}
 
 /// Configures how outputs are to be written.
 pub struct WriterConfig {
@@ -98,15 +27,10 @@ pub struct WriterConfig {
     /// making it an error to miss the prefix when emitting an output gives us a chance to catch
     /// such mistakes.
     prefix: PathBuf,
-    /// How existing files are handled.
-    existing_file_handling: ExistingFileHandling,
-    /// Modification time of the asset processor system.
-    ///
-    /// Certain asset types, such as those extracted from configs, may vary depending on when the
-    /// generator was modified, not just when the source was modified. For those types of files,
-    /// they will be written if the existing file is older than this typestamp, not just if the
-    /// source is newer than the existing file.
-    generator_mtime: Option<SystemTime>,
+    /// If true, write all output files without checking for existing outputs that can be re-used.
+    write_all: bool,
+    /// If true, don't actually write any outputs to the destination dir.
+    dry_run: bool,
 }
 
 impl WriterConfig {
@@ -115,8 +39,8 @@ impl WriterConfig {
         Self {
             base,
             prefix: PathBuf::new(),
-            existing_file_handling: ExistingFileHandling::SkipIfNewer,
-            generator_mtime: None,
+            write_all: false,
+            dry_run: false,
         }
     }
 
@@ -126,18 +50,16 @@ impl WriterConfig {
         self
     }
 
-    /// Set how existing files are to be handled.
-    pub fn set_existing_file_handling(
-        mut self,
-        existing_file_handling: ExistingFileHandling,
-    ) -> Self {
-        self.existing_file_handling = existing_file_handling;
+    /// Set whether to write all output files unconditionally, rather than checking for existing
+    /// files to dedup.
+    pub fn set_write_all(mut self, write_all: bool) -> Self {
+        self.write_all = write_all;
         self
     }
 
-    /// Sets the modification time for the file extractor.
-    pub fn set_generator_mtime(mut self, time: SystemTime) -> Self {
-        self.generator_mtime = Some(time);
+    /// Set whether to do a dry run; i.e. not acutally copy output.
+    pub fn set_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
         self
     }
 }
@@ -147,7 +69,7 @@ pub struct FileWriter<'a> {
     /// Configuration for the FileWriter.
     config: &'a WriterConfig,
     /// Set of output paths, relative to the base, which have already been written.
-    outputs: Mutex<HashMap<PathBuf, OutputFile<'a>>>,
+    outputs: Mutex<HashSet<PathBuf>>,
 }
 
 impl<'a> FileWriter<'a> {
@@ -159,15 +81,10 @@ impl<'a> FileWriter<'a> {
         }
     }
 
-    /// Insert a write marker of the speified `write_type` for the given `dest` [`Path`].
+    /// Insert a write marker for the specified path.
     ///
-    /// If another write to the same path was already requested, checks for compatiblity and
-    /// produces an error if the two writes are not compatible.
-    ///
-    /// Returns true if the value was newly inserted. If the copy already exists in the outputs,
-    /// returns false. False means that another task is already handling copying that asset to that
-    /// path.
-    fn insert_write(&self, write_type: WriteType<'a>, dest: &Path) -> anyhow::Result<bool> {
+    /// Returns an error if the specified path was already written this session.
+    fn insert_write(&self, dest: &Path) -> anyhow::Result<()> {
         if !dest.starts_with(&self.config.prefix) {
             bail!(
                 "Destination path {} must start with {}",
@@ -176,26 +93,11 @@ impl<'a> FileWriter<'a> {
             );
         }
         let mut outputs = self.outputs.lock().unwrap();
-        Ok(match outputs.entry(dest.to_path_buf()) {
-            Entry::Occupied(entry) => {
-                let existing = entry.get();
-                write_type.check_compatibility(&existing.write_type, entry.key())?;
-                false
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(OutputFile::new(write_type));
-                true
-            }
-        })
-    }
-
-    /// Updates the existing file state for a file. Panics if the file is not found.
-    fn update_existing_file_state(&self, path: &Path, state: ExistingFileState) {
-        let mut outputs = self.outputs.lock().unwrap();
-        outputs
-            .get_mut(path)
-            .expect("path must alread be inserted before calling update_existing_file_state")
-            .existing_file = state;
+        if outputs.insert(dest.to_path_buf()) {
+            Ok(())
+        } else {
+            bail!("Output file {} was already written", dest.display());
+        }
     }
 
     /// If existing output checks are enabled, checks if the destination file exists, and checks
@@ -203,12 +105,8 @@ impl<'a> FileWriter<'a> {
     /// be used, or false if the existing file should be overwritten.
     ///
     /// Can produce an error if there are issues checking asset modification times.
-    fn can_reuse_existing_output<S: Source + ?Sized>(
-        &self,
-        source: &S,
-        dest: &Path,
-    ) -> anyhow::Result<bool> {
-        if self.config.existing_file_handling == ExistingFileHandling::WriteAll {
+    fn can_reuse_existing_output(&self, asset: &Asset, dest: &Path) -> anyhow::Result<bool> {
+        if self.config.write_all {
             return Ok(false);
         }
         let existing_mtime = match fs::metadata(dest) {
@@ -216,7 +114,6 @@ impl<'a> FileWriter<'a> {
                 format!("while getting the modification time for {}", dest.display())
             })?,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                self.update_existing_file_state(dest, ExistingFileState::Missing);
                 return Ok(false);
             }
             Err(err) => Err(err).context(format!(
@@ -224,38 +121,18 @@ impl<'a> FileWriter<'a> {
                 dest.display()
             ))?,
         };
-        let source_mtime = source.mtime().with_context(|| {
+        let source_mtime = asset.modified_time().with_context(|| {
             format!(
                 "while getting the modification for the source of the write to {}",
                 dest.display()
             )
         })?;
-        if existing_mtime <= source_mtime {
-            self.update_existing_file_state(dest, ExistingFileState::OlderThanSource);
-            return Ok(false);
-        }
-        if source.depends_on_generator()
-            && let Some(gen_mtime) = self.config.generator_mtime
-            && existing_mtime <= gen_mtime
-        {
-            self.update_existing_file_state(dest, ExistingFileState::OlderThanGenerator);
-            return Ok(false);
-        }
-        self.update_existing_file_state(dest, ExistingFileState::UpToDate);
-        Ok(true)
+        Ok(source_mtime < existing_mtime)
     }
 
-    /// Copy the given asset to the specified destination path.
-    pub async fn copy_asset(&self, asset: &'a Asset, dest: PathBuf) -> anyhow::Result<()> {
-        let write_type = WriteType::AssetCopy {
-            source: asset.path(),
-        };
-        if !self.insert_write(write_type, &dest)? {
-            return Ok(());
-        }
-        if self.can_reuse_existing_output(asset, &dest)? {
-            return Ok(());
-        }
+    /// Prepends the base path to the dest dir and ensures the directory exists by creating all
+    /// intermediate directories on the path to the file. Does not create the actual output file.
+    fn create_dest_dir(&self, dest: &Path) -> anyhow::Result<PathBuf> {
         let full_dest = self.config.base.join(&dest);
         if let Some(dir) = full_dest.parent() {
             fs::create_dir_all(dir).with_context(|| {
@@ -265,6 +142,20 @@ impl<'a> FileWriter<'a> {
                 )
             })?;
         }
+        Ok(full_dest)
+    }
+
+    /// Copy the given asset to the specified destination path.
+    pub async fn copy_asset(&self, asset: &'a Asset, dest: PathBuf) -> anyhow::Result<()> {
+        self.insert_write(&dest)?;
+        if self.config.dry_run {
+            info!("Would write {} from {}", dest.display(), asset.path());
+            return Ok(());
+        }
+        if self.can_reuse_existing_output(asset, &dest)? {
+            return Ok(());
+        }
+        let full_dest = self.create_dest_dir(&dest)?;
         if let Some(real_path) = asset.real_path() {
             fs::copy(real_path, &full_dest).with_context(|| {
                 format!(
@@ -299,25 +190,36 @@ impl<'a> FileWriter<'a> {
         info!("Copied asset {asset:?} to {}", full_dest.display());
         Ok(())
     }
-}
 
-/// Source of an output. This trait is used to determine whether the output needs to be re-written.
-trait Source {
-    /// Get the relevant modification time for this source.
-    fn mtime(&self) -> io::Result<SystemTime>;
+    /// Output some generated configuration as Ron.
+    pub async fn generate_conf<T: Serialize>(&self, conf: T, dest: PathBuf) -> anyhow::Result<()> {
+        self.insert_write(&dest)?;
+        if self.config.dry_run {
+            info!(
+                "Would write {} from a config of type {}",
+                dest.display(),
+                std::any::type_name::<T>()
+            );
+            return Ok(());
+        }
 
-    /// Whether an output from this source depends on the asset extractor. Direct copies generally
-    /// don't require updating if the generator has chaned, while derived assets might, since the
-    /// generator could emit a different value after it has changed.
-    fn depends_on_generator(&self) -> bool;
-}
+        // We currently don't check for file re-use for generated files.
+        let full_dest = self.create_dest_dir(&dest)?;
 
-impl Source for Asset {
-    fn mtime(&self) -> io::Result<SystemTime> {
-        self.modified_time()
-    }
+        let output = File::create(&full_dest).with_context(|| {
+            format!(
+                "failed to open the dest file {} for generated config",
+                dest.display()
+            )
+        })?;
 
-    fn depends_on_generator(&self) -> bool {
-        false
+        let pretty = ron::ser::PrettyConfig::new()
+            .new_line("\n")
+            .compact_ranges(true)
+            .struct_names(true);
+        ron::Options::default()
+            .to_io_writer_pretty(output, &conf, pretty)
+            .with_context(|| format!("Failed to write serialized config to {}", dest.display()))?;
+        Ok(())
     }
 }

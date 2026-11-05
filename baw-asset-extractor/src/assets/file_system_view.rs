@@ -1,6 +1,8 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::collections::btree_map::{Entry, Values};
 use std::iter::FusedIterator;
+use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -76,6 +78,18 @@ impl FileSystemView {
             inner: self.view.values(),
         }
     }
+
+    /// Gets an iterator over a range of assets, by file name.
+    pub fn asset_range<T, R>(&self, range: R) -> Range<'_>
+    where
+        T: Ord + ?Sized,
+        MegPathBuf: Borrow<T> + Ord,
+        R: RangeBounds<T>,
+    {
+        Range {
+            inner: self.view.range(range),
+        }
+    }
 }
 
 /// An iterator over the assets in the current file system view.
@@ -113,3 +127,29 @@ impl<'a> ExactSizeIterator for Assets<'a> {
 }
 
 impl<'a> FusedIterator for Assets<'a> {}
+
+/// Iterator over a range of assets.
+#[derive(Default, Clone, Debug)]
+pub struct Range<'a> {
+    inner: std::collections::btree_map::Range<'a, MegPathBuf, Box<Asset>>,
+}
+
+impl<'a> Iterator for Range<'a> {
+    type Item = &'a Asset;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| &**v)
+    }
+
+    fn last(self) -> Option<Self::Item> {
+        self.inner.last().map(|(_, v)| &**v)
+    }
+}
+
+impl<'a> DoubleEndedIterator for Range<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| &**v)
+    }
+}
+
+impl<'a> FusedIterator for Range<'a> {}

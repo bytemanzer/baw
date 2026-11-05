@@ -1,6 +1,3 @@
-use std::path::Path;
-use std::sync::Arc;
-
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 
@@ -31,12 +28,6 @@ impl AloPlugins {
         Self {
             models_plugin: AloModelsPlugin::new(),
         }
-    }
-
-    /// Sets the prefix to prepend to texture paths in ALO model files.
-    pub fn with_texture_path_prefix(mut self, prefix: impl Into<Arc<Path>>) -> Self {
-        self.models_plugin.set_texture_path_prefix(prefix);
-        self
     }
 }
 

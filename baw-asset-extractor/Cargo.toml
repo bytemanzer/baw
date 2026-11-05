@@ -16,6 +16,9 @@ smol = "2.0.2"
 tracing = "0.1.44"
 walkdir = "2.5.0"
 
+bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
+petro-alo = { version = "0.1.0", path = "../petro-alo" }
+
 [dependencies.petro-meg]
 version = "1.1.0"
 default-features = false
@@ -23,3 +26,8 @@ features = ["v1", "reader"]
 # TODO: switch back to a released version
 git = "https://github.com/zstewar1/petro-meg.git"
 branch = "improved-path"
+
+[dependencies.bevy]
+version = "0.19.1"
+default-features = false
+features = ["bevy_image"]

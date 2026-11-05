@@ -5,6 +5,7 @@ use std::process::exit;
 use baw_asset_extractor::assets::FileSystemView;
 use baw_asset_extractor::extraction::config::ConfigExtractor;
 use baw_asset_extractor::extraction::models::ModelExtractor;
+use baw_asset_extractor::extraction::textures::TextureExtractor;
 use baw_asset_extractor::processing::{FileWriter, Processor, WriterConfig};
 use clap::Parser;
 use tracing::{Level, error, info, warn};
@@ -33,7 +34,12 @@ struct Args {
     prefix: PathBuf,
 
     /// Number of threads to use.
+    #[arg(long)]
     num_threads: Option<usize>,
+
+    /// If true, don't actually write any output.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -70,9 +76,12 @@ fn main() {
         return;
     }
 
-    let write_config = WriterConfig::new(args.mode.dest.unwrap()).set_prefix(&args.prefix);
+    let write_config = WriterConfig::new(args.mode.dest.unwrap())
+        .set_prefix(&args.prefix)
+        .set_dry_run(args.dry_run);
     let output = FileWriter::new(&write_config);
-    let models = ModelExtractor::new(&fs, &output).with_prefix(&args.prefix);
+    let textures = TextureExtractor::new(&fs, &output).with_prefix(&args.prefix);
+    let models = ModelExtractor::new(&fs, &output, &textures).with_prefix(&args.prefix);
     let configs = ConfigExtractor::new(&fs, &models, &output).with_prefix(&args.prefix);
 
     let res = Processor::new()
