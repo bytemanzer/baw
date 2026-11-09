@@ -6,12 +6,12 @@ use smol::channel::{RecvError, SendError, Sender};
 use tracing::{Level, debug, instrument, trace, trace_span, warn};
 
 /// Processes a set of operations in parallel.
-pub struct Processor<'a> {
-    executor: Arc<Executor<'a>>,
+pub struct Processor<'p> {
+    executor: Arc<Executor<'p>>,
     num_threads: NonZeroUsize,
 }
 
-impl<'a> Processor<'a> {
+impl<'p> Processor<'p> {
     /// Create a new executor.
     pub fn new() -> Self {
         Self {
@@ -30,8 +30,8 @@ impl<'a> Processor<'a> {
     /// operation and all sub-tasks it spawns have completed.
     pub fn run<F, Fut>(self, func: F) -> anyhow::Result<()>
     where
-        F: 'a + FnOnce(ProcessorContext<'a>) -> Fut + Send,
-        Fut: 'a + Future<Output = anyhow::Result<()>> + Send,
+        F: 'p + FnOnce(ProcessorContext<'p>) -> Fut + Send,
+        Fut: 'p + Future<Output = anyhow::Result<()>> + Send,
     {
         let (keep_alive, shutdown) = smol::channel::unbounded::<()>();
         let (error_reporter, error_receiver) = smol::channel::bounded::<anyhow::Error>(1);

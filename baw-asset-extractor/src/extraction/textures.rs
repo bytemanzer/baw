@@ -10,9 +10,9 @@ use tracing::{Level, instrument};
 use crate::assets::{Asset, FileSystemView};
 use crate::processing::{FileWriter, ProcessorContext};
 
-pub struct TextureExtractor<'a> {
+pub struct TextureExtractor<'a, 'p> {
     fs: &'a FileSystemView,
-    output: &'a FileWriter<'a>,
+    output: &'p FileWriter<'a>,
     prefix: PathBuf,
     /// Textures which have been extracted. The key used is the bare name with the extension removed
     /// (file_stem, so only one prefix removed if there are multiple). It should not include a
@@ -20,10 +20,10 @@ pub struct TextureExtractor<'a> {
     found_textures: Mutex<HashMap<AinString, PathBuf>>,
 }
 
-impl<'a> TextureExtractor<'a> {
+impl<'a, 'p> TextureExtractor<'a, 'p> {
     /// Create a new config extractor that reads from the specified filesystem and writes to the
     /// given file output.
-    pub fn new(fs: &'a FileSystemView, output: &'a FileWriter<'a>) -> Self {
+    pub fn new(fs: &'a FileSystemView, output: &'p FileWriter<'a>) -> Self {
         Self {
             fs,
             output,
@@ -40,7 +40,7 @@ impl<'a> TextureExtractor<'a> {
 
     /// Finds an asset matching the given texture's file stem, ignoring extension, within the
     /// texture directory.
-    fn find_matching_texture(&self, stem: &AinStr) -> anyhow::Result<&Asset> {
+    fn find_matching_texture(&self, stem: &AinStr) -> anyhow::Result<&'a Asset> {
         const TEXTURES: &MegPath = meg_path!("Data\\Art\\Textures");
 
         let stem_path = MegPath::from_ain_str(stem)
@@ -74,7 +74,8 @@ impl<'a> TextureExtractor<'a> {
             None => bail!("mapped file name is empty"),
             Some(name) => name.to_lowercase().into_string(),
         };
-        let mut output_texture_file = self.prefix.join("textures");
+        let mut output_texture_file = self.prefix.join("art");
+        output_texture_file.push("textures");
         output_texture_file.push(file_name);
         Ok(output_texture_file)
     }
@@ -111,8 +112,8 @@ impl<'a> TextureExtractor<'a> {
     /// The model name should be the bare model name, no directory.
     #[instrument(skip_all, level = Level::DEBUG, fields(model.name = name.as_str()))]
     pub async fn find_texture(
-        &'a self,
-        ctx: &ProcessorContext<'a>,
+        &'p self,
+        ctx: &ProcessorContext<'p>,
         name: &MegPath,
     ) -> anyhow::Result<PathBuf> {
         let stem = validate_name_and_get_stem(name)?;

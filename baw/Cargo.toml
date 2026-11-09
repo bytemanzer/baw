@@ -8,15 +8,15 @@ default = ["physics-debug"]
 physics-debug = ["avian3d/debug-plugin"]
 
 [dependencies]
-anyhow = "^1.0.104"
+anyhow = "1.0.104"
 bevy = { version = "0.19.1", features = ["debug", "dds"] }
 bevy_panorbit_camera = "0.35.0"
 clap = { version = "^4.6.1", features = ["derive"] }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 
+baw-config = { version = "0.1.0", path = "../baw-config" }
 bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
-baw-scene-util = { version = "0.1.0", path = "../baw-scene-util" }
 
 [dependencies.avian3d]
 version = "^0.7.0"

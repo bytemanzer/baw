@@ -540,7 +540,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "avian3d",
- "baw-scene-util",
+ "baw-config",
  "bevy",
  "bevy-alo",
  "bevy_panorbit_camera",
@@ -555,6 +555,7 @@ version = "0.1.0"
 dependencies = [
  "ain",
  "anyhow",
+ "baw-config",
  "bevy",
  "bevy-alo",
  "easy-parallel",
@@ -578,6 +579,17 @@ dependencies = [
  "clap",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "baw-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "baw-scene-util",
+ "bevy",
+ "ron",
+ "serde",
 ]
 
 [[package]]

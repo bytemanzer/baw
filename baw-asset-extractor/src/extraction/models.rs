@@ -5,7 +5,9 @@ use std::sync::Mutex;
 
 use anyhow::{Context as _, bail};
 use bevy::asset::AssetPath;
-use bevy_alo::models::AloMeta;
+use bevy::asset::meta::{AssetAction, AssetMeta};
+use bevy::reflect::TypePath;
+use bevy_alo::models::{AloLoader, AloMeta};
 use petro_alo::AloFile;
 use petro_alo::mesh::ShaderParam;
 use petro_meg::path::{MegPath, MegPathBuf, meg_path};
@@ -15,10 +17,10 @@ use crate::assets::{Asset, FileSystemView};
 use crate::extraction::textures::TextureExtractor;
 use crate::processing::{FileWriter, ProcessorContext};
 
-pub struct ModelExtractor<'a> {
+pub struct ModelExtractor<'a, 'p> {
     fs: &'a FileSystemView,
-    output: &'a FileWriter<'a>,
-    textures: &'a TextureExtractor<'a>,
+    output: &'p FileWriter<'a>,
+    textures: &'p TextureExtractor<'a, 'p>,
     prefix: PathBuf,
     /// Models which have already been found and processed, mapped to the extracted asset path to
     /// use for that model.
@@ -28,13 +30,13 @@ pub struct ModelExtractor<'a> {
     found_models: Mutex<HashMap<MegPathBuf, PathBuf>>,
 }
 
-impl<'a> ModelExtractor<'a> {
+impl<'a, 'p> ModelExtractor<'a, 'p> {
     /// Create a new config extractor that reads from the specified filesystem and writes to the
     /// given file output.
     pub fn new(
         fs: &'a FileSystemView,
-        output: &'a FileWriter<'a>,
-        textures: &'a TextureExtractor<'a>,
+        output: &'p FileWriter<'a>,
+        textures: &'p TextureExtractor<'a, 'p>,
     ) -> Self {
         Self {
             fs,
@@ -57,7 +59,8 @@ impl<'a> ModelExtractor<'a> {
             None => bail!("model file name is empty"),
             Some(name) => name.to_lowercase().into_string(),
         };
-        let mut output_model_file = self.prefix.join("models");
+        let mut output_model_file = self.prefix.join("art");
+        output_model_file.push("models");
         output_model_file.push(file_name);
         Ok(output_model_file)
     }
@@ -94,8 +97,8 @@ impl<'a> ModelExtractor<'a> {
     /// The model name should be the bare model name, no directory.
     #[instrument(skip_all, level = Level::DEBUG, fields(model.name = name.as_str()))]
     pub async fn find_model(
-        &'a self,
-        ctx: &ProcessorContext<'a>,
+        &'p self,
+        ctx: &ProcessorContext<'p>,
         name: &MegPath,
     ) -> anyhow::Result<PathBuf> {
         let (output_model_file, already_processed) = self.find_or_insert_model_path_for(name)?;
@@ -126,8 +129,8 @@ impl<'a> ModelExtractor<'a> {
     /// directory, along with metadata describing how to map texture from this ALO file to the
     /// output.
     async fn find_model_dependencies(
-        &'a self,
-        ctx: ProcessorContext<'a>,
+        &'p self,
+        ctx: ProcessorContext<'p>,
         asset: &'a Asset,
         mut output_model_path: PathBuf,
     ) -> anyhow::Result<()> {
@@ -147,8 +150,13 @@ impl<'a> ModelExtractor<'a> {
             meta.texture_mapping
                 .insert(texture_name, AssetPath::from_path_buf(path));
         }
-        output_model_path.add_extension("meta");
 
+        let meta = AssetMeta::<AloLoader, ()>::new(AssetAction::Load {
+            loader: AloLoader::type_path().to_string(),
+            settings: meta,
+        });
+
+        output_model_path.add_extension("meta");
         ctx.spawn(self.output.generate_conf(meta, output_model_path))
             .await;
 

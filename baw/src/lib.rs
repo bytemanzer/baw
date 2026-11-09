@@ -1,17 +1,14 @@
-use std::path::Path;
-
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy_alo::AloPlugins;
 use bevy_alo::billboard::AloBillboardSystemSet;
 use bevy_alo::components::{AloBone, AloCamera};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
+use baw_config::ConfigPlugins;
 
 use crate::physics::BawPhysicsPlugins;
-use crate::units::UnitsPlugin;
 
 mod physics;
-pub mod units;
 
 /// Configures BAW.
 pub struct BawPlugin {
@@ -33,7 +30,7 @@ impl Plugin for BawPlugin {
             AloPlugins::new(),
             PanOrbitCameraPlugin,
             BawPhysicsPlugins::new(),
-            UnitsPlugin,
+            ConfigPlugins,
         ))
         .insert_resource(ClearColor(Srgba::BLACK.into()))
         .configure_sets(

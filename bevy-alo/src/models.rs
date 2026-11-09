@@ -30,7 +30,7 @@ use petro_alo::skeleton::{BillboardMode, Skeleton};
 use serde::{Deserialize, Serialize};
 
 use crate::components::{AloBone, AloFaceCamera, AloInitialVisibility, AloMesh};
-use crate::labels::AloAssetLabel;
+use crate::labels;
 use crate::materials::{AloMaterial, AloMaterialExtension, TeamColorsMapping};
 use crate::{ALO_TO_BEVY, AloError, alo_to_bevy};
 
@@ -357,7 +357,7 @@ type LodMappings = HashMap<(LodGroup, Lod), VisibilityRange>;
 
 /// Loads ALO Models.
 #[derive(Default, TypePath)]
-struct AloLoader {
+pub struct AloLoader {
     /// Handle to the shader storage buffer containing the team colors.
     team_colors_buffer: Handle<ShaderBuffer>,
     /// Mapping from LOD levels to the range at which that LOD fades in.
@@ -490,14 +490,7 @@ impl AloLoader {
                 submesh.primitives,
                 submesh.vertex_data,
             );
-            let mesh = load_context.add_labeled_asset(
-                AloAssetLabel::Submesh {
-                    mesh_idx,
-                    submesh_idx,
-                }
-                .to_string(),
-                mesh,
-            );
+            let mesh = load_context.add_labeled_asset(labels::submesh(mesh_idx, submesh_idx), mesh);
 
             let material = build_submesh_material(
                 load_context,
@@ -506,14 +499,8 @@ impl AloLoader {
                 self.team_colors_buffer.clone(),
             )?;
             let material = material.map(|material| {
-                load_context.add_labeled_asset(
-                    AloAssetLabel::SubmeshMaterial {
-                        mesh_idx,
-                        submesh_idx,
-                    }
-                    .to_string(),
-                    material,
-                )
+                load_context
+                    .add_labeled_asset(labels::submesh_material(mesh_idx, submesh_idx), material)
             });
             let material_properties = material.map(|material| SubmeshMaterialProperties {
                 material,
@@ -528,11 +515,7 @@ impl AloLoader {
                     inverse_bindposes.push(bones[mapping].inverse_bindpose);
                 }
                 let inverse_bindposes = load_context.add_labeled_asset(
-                    AloAssetLabel::SubmeshInverseBindposes {
-                        mesh_idx,
-                        submesh_idx,
-                    }
-                    .to_string(),
+                    labels::submesh_inverse_bindposes(mesh_idx, submesh_idx),
                     SkinnedMeshInverseBindposes::from(inverse_bindposes),
                 );
 

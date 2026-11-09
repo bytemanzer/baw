@@ -1,0 +1,16 @@
+[package]
+name = "baw-config"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+ron = "0.12.2"
+serde = { version = "1.0.229", features = ["derive"] }
+
+baw-scene-util = { version = "0.1.0", path = "../baw-scene-util" }
+
+[dependencies.bevy]
+version = "0.19.1"
+default-features = false
+features = []

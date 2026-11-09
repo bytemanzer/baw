@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "baw",
     "baw-asset-extractor",
-    "baw-asset-extractor-cli",
+    "baw-asset-extractor-cli", "baw-config",
     "baw-scene-util",
     "bevy-alo",
     "petro-alo",

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -6,7 +7,9 @@ use baw_asset_extractor::assets::FileSystemView;
 use baw_asset_extractor::extraction::config::ConfigExtractor;
 use baw_asset_extractor::extraction::models::ModelExtractor;
 use baw_asset_extractor::extraction::textures::TextureExtractor;
-use baw_asset_extractor::processing::{FileWriter, Processor, WriterConfig};
+use baw_asset_extractor::processing::{
+    FileWriter, Processor, ReuseExistingDecision, WriteType, WriterConfig,
+};
 use clap::Parser;
 use tracing::{Level, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -76,22 +79,21 @@ fn main() {
         return;
     }
 
-    let write_config = WriterConfig::new(args.mode.dest.unwrap())
-        .set_prefix(&args.prefix)
-        .set_dry_run(args.dry_run);
-    let output = FileWriter::new(&write_config);
-    let textures = TextureExtractor::new(&fs, &output).with_prefix(&args.prefix);
-    let models = ModelExtractor::new(&fs, &output, &textures).with_prefix(&args.prefix);
-    let configs = ConfigExtractor::new(&fs, &models, &output).with_prefix(&args.prefix);
+    let output = FileWriter::new(
+        WriterConfig::new(args.mode.dest.unwrap())
+            .set_prefix(&args.prefix)
+            .set_dry_run(args.dry_run),
+    );
 
-    let res = Processor::new()
-        .num_threads(choose_num_threads(args.num_threads))
-        .run(|ctx| configs.extract_data_files(ctx));
-
-    if let Err(err) = res {
+    if let Err(err) = run_processing(args.prefix, args.num_threads, &fs, &output) {
         eprintln!("Failed to extract game assets: {err}");
         exit(1);
     }
+
+    if args.dry_run {
+        print_written(output)
+    }
+
     info!("Done");
 }
 
@@ -132,5 +134,57 @@ fn choose_num_threads(requested: Option<usize>) -> NonZeroUsize {
             );
             NonZeroUsize::MIN
         }
+    }
+}
+
+/// Run the processors on the assets in the filesystem, writing output to the given FileWriter.
+fn run_processing<'a>(
+    prefix: PathBuf,
+    num_threads: Option<usize>,
+    fs: &'a FileSystemView,
+    output: &FileWriter<'a>,
+) -> anyhow::Result<()> {
+    let textures = TextureExtractor::new(&fs, &output).with_prefix(&prefix);
+    let models = ModelExtractor::new(&fs, &output, &textures).with_prefix(&prefix);
+    let configs = ConfigExtractor::new(&fs, &models, &output).with_prefix(&prefix);
+
+    Processor::new()
+        .num_threads(choose_num_threads(num_threads))
+        .run(|ctx| configs.extract_data_files(ctx))
+}
+
+/// Print all the files written to the FileWriter.
+fn print_written(output: FileWriter<'_>) {
+    let files: BTreeMap<_, _> = output.into_outputs().collect();
+    for (path, state) in files {
+        match state.write_type {
+            WriteType::Asset { original } => {
+                println!(
+                    "{} based on asset {}: {}",
+                    path.display(),
+                    original.path(),
+                    describe_decision(state.reuse_existing_decision)
+                );
+            }
+            WriteType::GenConf { config_type } => {
+                println!(
+                    "{} generated type {}: {}",
+                    path.display(),
+                    config_type,
+                    describe_decision(state.reuse_existing_decision)
+                );
+            }
+        }
+    }
+}
+
+fn describe_decision(decision: ReuseExistingDecision) -> &'static str {
+    match decision {
+        ReuseExistingDecision::Undecided => "re-use state not determined",
+        ReuseExistingDecision::WriteAll => "copied (write-all)",
+        ReuseExistingDecision::Generated => "written (new, generated)",
+        ReuseExistingDecision::NotFound => "copied (new)",
+        ReuseExistingDecision::OlderThanSource => "copied (outdated)",
+        ReuseExistingDecision::NewerThanSource => "skipped (up to date)",
     }
 }
