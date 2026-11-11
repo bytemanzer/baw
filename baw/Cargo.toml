@@ -15,7 +15,7 @@ clap = { version = "^4.6.1", features = ["derive"] }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 
-baw-config = { version = "0.1.0", path = "../baw-config" }
+baw-ships = { version = "0.1.0", path = "../baw-ships" }
 bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
 
 [dependencies.avian3d]

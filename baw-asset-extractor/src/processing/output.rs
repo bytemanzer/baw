@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context as _, bail};
 use serde::Serialize;
-use tracing::info;
+use tracing::{Level, debug, instrument};
 
 use crate::assets::Asset;
 
@@ -174,7 +174,8 @@ impl<'a> FileWriter<'a> {
             self.update_reuse_decision(dest, ReuseExistingDecision::WriteAll);
             return Ok(false);
         }
-        let existing_mtime = match fs::metadata(dest) {
+        let full_dest = self.config.base.join(&dest);
+        let existing_mtime = match fs::metadata(full_dest) {
             Ok(meta) => meta.modified().with_context(|| {
                 format!("Failed to get the modification time for {}", dest.display())
             })?,
@@ -218,10 +219,19 @@ impl<'a> FileWriter<'a> {
     }
 
     /// Copy the given asset to the specified destination path.
+    #[instrument(err, skip_all, level = Level::DEBUG, fields(asset = asset.path().as_str(), dest))]
     pub async fn copy_asset(&self, asset: &'a Asset, dest: PathBuf) -> anyhow::Result<()> {
         self.insert_write(&dest, WriteType::Asset { original: asset })?;
         if self.config.dry_run {
-            info!("Would write {} from {}", dest.display(), asset.path());
+            if self.can_reuse_existing_output(asset, &dest)? {
+                debug!(
+                    "Would re-use existing file {} for {}",
+                    dest.display(),
+                    asset.path()
+                );
+            } else {
+                debug!("Would write {} from {}", dest.display(), asset.path());
+            }
             return Ok(());
         }
         if self.can_reuse_existing_output(asset, &dest)? {
@@ -259,7 +269,7 @@ impl<'a> FileWriter<'a> {
                 )
             })?;
         }
-        info!("Copied asset {asset:?} to {}", full_dest.display());
+        debug!("Copied asset {asset:?} to {}", full_dest.display());
         Ok(())
     }
 
@@ -270,7 +280,7 @@ impl<'a> FileWriter<'a> {
         };
         self.insert_write(&dest, write_type)?;
         if self.config.dry_run {
-            info!(
+            debug!(
                 "Would write {} from a config of type {}",
                 dest.display(),
                 std::any::type_name::<T>()
@@ -287,6 +297,11 @@ impl<'a> FileWriter<'a> {
                 dest.display()
             )
         })?;
+        debug!(
+            "Created {} from a config of type {}",
+            dest.display(),
+            std::any::type_name::<T>()
+        );
 
         let pretty = ron::ser::PrettyConfig::new()
             .new_line("\n")

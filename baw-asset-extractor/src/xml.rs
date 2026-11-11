@@ -10,6 +10,11 @@ use serde::de::{DeserializeOwned, Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};
 use tracing::warn;
 
+/// Helper for XML defaults when mixing with custom deserialization.
+pub(crate) fn none<T>() -> Option<T> {
+    None
+}
+
 /// Deserialize the entire file as XML, by first loading it into memory and decoding it as either
 /// utf-8 or CP 1252.
 pub fn deserialize_xml_utf8_or_cp1252<T: DeserializeOwned, R: Read>(mut r: R) -> anyhow::Result<T> {

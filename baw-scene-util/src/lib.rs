@@ -1,3 +1,5 @@
+use bevy_scene::{ResolveContext, ResolveSceneError, ResolvedScene, Scene};
+
 /// Type used for identifying unique scene types in bevy scenes. This is used to uniquely identify a
 /// scene type so that SceneEntityReferences don't collide.
 pub type SceneTypeId = (&'static str, usize, usize);
@@ -124,3 +126,20 @@ macro_rules! __with_template {
 
 pub use __scene_type_id as scene_type_id;
 pub use __with_template as with_template;
+use bevy_transform::components::Transform;
+
+/// Utility scene which scales the current scene's [`Transform`] by the given factor.
+pub struct ScaleScene(pub f32);
+
+impl Scene for ScaleScene {
+    fn resolve(
+        self,
+        context: &mut ResolveContext,
+        scene: &mut ResolvedScene,
+    ) -> Result<(), ResolveSceneError> {
+        with_template!(context, scene, Transform, |trans| {
+            trans.scale *= self.0;
+        });
+        Ok(())
+    }
+}

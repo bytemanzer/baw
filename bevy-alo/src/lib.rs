@@ -1,7 +1,7 @@
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 
-pub use error::AloError;
+pub use crate::error::AloError;
 
 use crate::billboard::AloBillboardPlugin;
 use crate::components::AloComponentsPlugin;

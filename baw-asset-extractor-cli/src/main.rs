@@ -11,7 +11,7 @@ use baw_asset_extractor::processing::{
     FileWriter, Processor, ReuseExistingDecision, WriteType, WriterConfig,
 };
 use clap::Parser;
-use tracing::{Level, error, info, warn};
+use tracing::{Level, debug, error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Extracts content from Empire at War that is needed for `baw` game.
@@ -20,12 +20,13 @@ use tracing_subscriber::EnvFilter;
 struct Args {
     /// Source directory to scan for config files. This should be the path to the Empire at War
     /// GameData folder.
-    #[arg(short, long, alias = "source")]
-    src: PathBuf,
-
-    /// Path to a mod folder, which will be layered on top of the base GameData before extracting.
-    #[arg(long = "mod", alias = "modpath")]
-    modpath: Option<PathBuf>,
+    ///
+    /// Can be provided multiple times to overlay different sets of game files, e.g. to extract
+    /// Forces of Corruption, you specify the `corruption` folder after the base game's `GameData`
+    /// folder. To add Mods, you specify the Mod's `GameData`-equivalent folder (the parent of
+    /// `Data`) afterr the base game or base game + FoC.
+    #[arg(short, long, required = true, alias = "source")]
+    src: Vec<PathBuf>,
 
     #[command(flatten)]
     mode: Mode,
@@ -60,14 +61,14 @@ fn main() {
     tracing_subscriber::fmt::fmt()
         .with_env_filter(
             EnvFilter::builder()
-                .with_default_directive(Level::WARN.into())
+                .with_default_directive(Level::INFO.into())
                 .with_env_var(EnvFilter::DEFAULT_ENV)
                 .from_env_lossy(),
         )
         .init();
     let args = Args::parse();
 
-    let fs = build_fs_view(&args.src, args.modpath.as_deref()).unwrap_or_else(|err| {
+    let fs = build_fs_view(&args.src).unwrap_or_else(|err| {
         eprintln!("Unable to build filesystem view: {err}");
         exit(1);
     });
@@ -85,7 +86,8 @@ fn main() {
             .set_dry_run(args.dry_run),
     );
 
-    if let Err(err) = run_processing(args.prefix, args.num_threads, &fs, &output) {
+    let num_threads = choose_num_threads(args.num_threads);
+    if let Err(err) = run_processing(args.prefix, num_threads, &fs, &output) {
         eprintln!("Failed to extract game assets: {err}");
         exit(1);
     }
@@ -98,15 +100,22 @@ fn main() {
 }
 
 /// Build the file system view or the given src and mod paths.
-fn build_fs_view(src: &Path, modpath: Option<&Path>) -> anyhow::Result<FileSystemView> {
+fn build_fs_view(srcs: &[impl AsRef<Path>]) -> anyhow::Result<FileSystemView> {
     let mut fs = FileSystemView::new();
-    info!("Finding disk files in {}", src.display());
-    fs.overlay_disk_files(src)?;
-    if let Some(modpath) = modpath {
-        info!("Finding mod files in {}", modpath.display());
-        fs.overlay_disk_files(modpath)?;
+    for src in srcs {
+        let layer = build_fs_view_layer(src.as_ref())?;
+        fs.overlay_filesystem(layer);
     }
-    info!("Finding mega files");
+    Ok(fs)
+}
+
+/// Createa  single layer of the final filesystem view.
+#[instrument(err)]
+fn build_fs_view_layer(path: &Path) -> anyhow::Result<FileSystemView> {
+    let mut fs = FileSystemView::new();
+    debug!("Finding disk files");
+    fs.overlay_disk_files(path)?;
+    debug!("Finding mega files");
     fs.overlay_mega_files()?;
     Ok(fs)
 }
@@ -140,7 +149,7 @@ fn choose_num_threads(requested: Option<usize>) -> NonZeroUsize {
 /// Run the processors on the assets in the filesystem, writing output to the given FileWriter.
 fn run_processing<'a>(
     prefix: PathBuf,
-    num_threads: Option<usize>,
+    num_threads: NonZeroUsize,
     fs: &'a FileSystemView,
     output: &FileWriter<'a>,
 ) -> anyhow::Result<()> {
@@ -149,7 +158,7 @@ fn run_processing<'a>(
     let configs = ConfigExtractor::new(&fs, &models, &output).with_prefix(&prefix);
 
     Processor::new()
-        .num_threads(choose_num_threads(num_threads))
+        .num_threads(num_threads)
         .run(|ctx| configs.extract_data_files(ctx))
 }
 

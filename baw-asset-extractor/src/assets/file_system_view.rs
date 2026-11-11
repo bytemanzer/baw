@@ -25,13 +25,14 @@ impl FileSystemView {
     }
 
     /// Gets the asset at the given path.
-    pub fn get(&self, path: &MegPath) -> Option<&Asset> {
-        self.view.get(path).map(|a| &**a)
+    pub fn get(&self, path: impl AsRef<MegPath>) -> Option<&Asset> {
+        self.view.get(path.as_ref()).map(|a| &**a)
     }
 
     /// Inserts or overlays the given asset.
-    pub fn overlay_asset(&mut self, asset: Box<Asset>) {
-        match self.view.entry(asset.path().to_owned()) {
+    fn overlay_asset_internal(&mut self, path: MegPathBuf, asset: Box<Asset>) {
+        debug_assert!(path == asset.path());
+        match self.view.entry(path) {
             Entry::Occupied(mut entry) => {
                 trace!(
                     "Overlaying asset {}: replacing {} with {}",
@@ -52,6 +53,11 @@ impl FileSystemView {
         }
     }
 
+    /// Inserts or overlays the given asset.
+    pub fn overlay_asset(&mut self, asset: Box<Asset>) {
+        self.overlay_asset_internal(asset.path().to_owned(), asset);
+    }
+
     /// Explores all files in the given `GameData` directory and overlays all files within the
     /// `Data` folder onto this view.
     ///
@@ -70,6 +76,13 @@ impl FileSystemView {
             self.overlay_asset(asset?);
         }
         Ok(())
+    }
+
+    /// Moves assets from another FileSystemView to this one.
+    pub fn overlay_filesystem(&mut self, other: FileSystemView) {
+        for (path, asset) in other.view {
+            self.overlay_asset_internal(path, asset);
+        }
     }
 
     /// Gets an iterator over the assets in the current file system view.

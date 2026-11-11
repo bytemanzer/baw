@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use ain::{AinStr, AinString};
 use anyhow::{Context as _, bail};
 use petro_meg::path::{MegPath, meg_path};
-use tracing::{Level, instrument};
+use tracing::instrument;
 
 use crate::assets::{Asset, FileSystemView};
 use crate::processing::{FileWriter, ProcessorContext};
@@ -40,7 +40,7 @@ impl<'a, 'p> TextureExtractor<'a, 'p> {
 
     /// Finds an asset matching the given texture's file stem, ignoring extension, within the
     /// texture directory.
-    fn find_matching_texture(&self, stem: &AinStr) -> anyhow::Result<&'a Asset> {
+    fn find_matching_texture(&self, stem: &AinStr) -> anyhow::Result<Option<&'a Asset>> {
         const TEXTURES: &MegPath = meg_path!("Data\\Art\\Textures");
 
         let stem_path = MegPath::from_ain_str(stem)
@@ -49,7 +49,7 @@ impl<'a, 'p> TextureExtractor<'a, 'p> {
 
         for file in self.fs.asset_range(without_ext..) {
             if file.path().file_stem() == Some(stem) {
-                return Ok(file);
+                return Ok(Some(file));
             }
             // If we're past the point where file stems start with the same prefix we're looking
             // for, we've gone too far.
@@ -65,7 +65,7 @@ impl<'a, 'p> TextureExtractor<'a, 'p> {
                 break;
             }
         }
-        bail!("No texture was found with name {stem}");
+        Ok(None)
     }
 
     /// Convert the found texture file path to a path in the output directory with the prefix.
@@ -110,23 +110,25 @@ impl<'a, 'p> TextureExtractor<'a, 'p> {
     /// the model will have in the output directory, including any relevant prefix.
     ///
     /// The model name should be the bare model name, no directory.
-    #[instrument(skip_all, level = Level::DEBUG, fields(model.name = name.as_str()))]
+    #[instrument(err, skip_all, fields(model.name = name.as_str()))]
     pub async fn find_texture(
         &'p self,
         ctx: &ProcessorContext<'p>,
         name: &MegPath,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<Option<PathBuf>> {
         let stem = validate_name_and_get_stem(name)?;
         // This part can run more than once since we haven't done a lock and dedupe yet, but that's
         // fine since find_matching_texture is just a simple search.
-        let mapped_file = self.find_matching_texture(&stem)?;
+        let Some(mapped_file) = self.find_matching_texture(&stem)? else {
+            return Ok(None);
+        };
         let (output_texture_file, already_processed) =
             self.find_or_insert_texture_path_for(stem, mapped_file.path())?;
         if already_processed {
             // The eixsting processing run might fail, but that's OK as long as the error gets
             // reported somewhere. We don't need to force every check for the same model name to
             // always fail.
-            return Ok(output_texture_file);
+            return Ok(Some(output_texture_file));
         }
 
         ctx.spawn(
@@ -135,7 +137,7 @@ impl<'a, 'p> TextureExtractor<'a, 'p> {
         )
         .await;
 
-        Ok(output_texture_file)
+        Ok(Some(output_texture_file))
     }
 }
 

@@ -540,7 +540,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "avian3d",
- "baw-config",
+ "baw-ships",
  "bevy",
  "bevy-alo",
  "bevy_panorbit_camera",
@@ -556,8 +556,9 @@ dependencies = [
  "ain",
  "anyhow",
  "baw-config",
- "bevy",
  "bevy-alo",
+ "bevy_asset",
+ "bevy_reflect",
  "easy-parallel",
  "encoding_rs",
  "petro-alo",
@@ -566,6 +567,7 @@ dependencies = [
  "ron",
  "serde",
  "smol",
+ "thiserror 2.0.20",
  "tracing",
  "walkdir",
 ]
@@ -585,10 +587,8 @@ dependencies = [
 name = "baw-config"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "baw-scene-util",
- "bevy",
- "ron",
+ "bevy_asset",
+ "bevy_reflect",
  "serde",
 ]
 
@@ -598,6 +598,19 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "bevy_scene",
+ "bevy_transform",
+]
+
+[[package]]
+name = "baw-ships"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "baw-config",
+ "baw-scene-util",
+ "bevy",
+ "ron",
+ "serde",
 ]
 
 [[package]]

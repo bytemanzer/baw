@@ -5,6 +5,5 @@ edition = "2024"
 
 [dependencies]
 bevy_ecs = "^0.19.1"
-
-[dev-dependencies]
 bevy_scene = "^0.19.1"
+bevy_transform = "^0.19.1"

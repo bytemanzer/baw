@@ -1,0 +1,17 @@
+[package]
+name = "baw-ships"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+ron = "0.12.2"
+serde = { version = "1.0.229", features = ["derive"] }
+
+baw-scene-util = { version = "0.1.0", path = "../baw-scene-util" }
+baw-config = { version = "0.1.0", path = "../baw-config" }
+
+[dependencies.bevy]
+version = "0.19.1"
+default-features = false
+features = []

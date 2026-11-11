@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::{Context as _, bail};
-use bevy::asset::AssetPath;
-use bevy::asset::meta::{AssetAction, AssetMeta};
-use bevy::reflect::TypePath;
 use bevy_alo::models::{AloLoader, AloMeta};
+use bevy_asset::AssetPath;
+use bevy_asset::meta::{AssetAction, AssetMeta};
+use bevy_reflect::TypePath;
 use petro_alo::AloFile;
 use petro_alo::mesh::ShaderParam;
 use petro_meg::path::{MegPath, MegPathBuf, meg_path};
-use tracing::{Level, instrument};
+use tracing::{instrument, warn};
 
 use crate::assets::{Asset, FileSystemView};
 use crate::extraction::textures::TextureExtractor;
@@ -95,7 +95,7 @@ impl<'a, 'p> ModelExtractor<'a, 'p> {
     /// model will have in the output directory, including any relevant prefix.
     ///
     /// The model name should be the bare model name, no directory.
-    #[instrument(skip_all, level = Level::DEBUG, fields(model.name = name.as_str()))]
+    #[instrument(err, skip_all, fields(model.name = name.as_str()))]
     pub async fn find_model(
         &'p self,
         ctx: &ProcessorContext<'p>,
@@ -144,7 +144,13 @@ impl<'a, 'p> ModelExtractor<'a, 'p> {
                         texture_name.display(),
                     )
                 })?;
-            let path = self.textures.find_texture(&ctx, texture_name_meg).await?;
+            let Some(path) = self.textures.find_texture(&ctx, texture_name_meg).await? else {
+                warn!(
+                    "Model uses texture {} which does not exist in the current overlays",
+                    texture_name.display()
+                );
+                continue;
+            };
             // We expect that the textures manager will always return the same path for the same
             // input, so we don't worry about checking for dupes or compatibility.
             meta.texture_mapping

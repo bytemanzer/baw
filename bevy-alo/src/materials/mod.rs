@@ -1,4 +1,4 @@
-use bevy::asset::{Asset, Handle, embedded_asset};
+use bevy::asset::embedded_asset;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
@@ -8,8 +8,7 @@ use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
 use bevy::render::storage::ShaderBuffer;
-use bevy::shader::ShaderRef;
-use bevy::shader::load_shader_library;
+use bevy::shader::{ShaderRef, load_shader_library};
 use bitflags::bitflags;
 
 pub struct AloMaterialsPlugin;

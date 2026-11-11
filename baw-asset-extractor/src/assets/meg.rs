@@ -149,11 +149,19 @@ impl Iterator for MegFileAssets {
 
 /// Find a data/megafiles.xml file in the current filesystem view, then finds any mega files it
 /// lists which are present in the filesystem and iterates over their files.
+///
+/// IF there is not `megafiles.xml` in the current data folder, produces an empty asset list.
 pub(crate) fn find_mega_assets(filesystem: &FileSystemView) -> anyhow::Result<MegAssets> {
     const XML_PATH: &MegPath = meg_path!("Data\\Megafiles.XML");
     let megafiles_xml = match filesystem.get(XML_PATH) {
         Some(asset) => asset,
-        None => bail!("{XML_PATH} not found"),
+        None => {
+            debug!("No {XML_PATH} found in the current filesystem");
+            return Ok(MegAssets {
+                real_paths: Vec::new().into_iter(),
+                current: None,
+            });
+        }
     };
     let megafiles_xml = megafiles_xml.open_reader()?;
     let megafiles: FileListXml = xml::deserialize_xml_utf8_or_cp1252(megafiles_xml)?;
