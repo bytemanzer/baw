@@ -6,11 +6,9 @@ use baw_scene_util::{SceneTypeId, scene_type_id, with_template};
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetLoader, AssetPath, LoadContext, RenderAssetUsages};
 use bevy::camera::visibility::VisibilityRange;
-//use bevy::color::{LinearRgba, Srgba};
 use bevy::ecs::template::{EntityTemplate, SceneEntityReference};
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
-//use bevy::material::AlphaMode;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
 use bevy::pbr::ExtendedMaterial;
@@ -319,7 +317,7 @@ impl Scene for AloSubmeshScene {
                 mat.0 = mat_props.material.into();
             });
             with_template!(context, scene, MeshTag, |tag| {
-                tag.0 = 0;
+                *tag = MeshTag::with_type::<AloMaterial>(0);
             });
             if !mat_props.cast_shadows {
                 with_template!(context, scene, NotShadowCaster);

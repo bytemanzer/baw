@@ -15,10 +15,8 @@ pub struct AloMaterialsPlugin;
 
 impl Plugin for AloMaterialsPlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "alo_bindings.wgsl");
-        load_shader_library!(app, "alo_io.wgsl");
-        embedded_asset!(app, "alo_vertex.wgsl");
-        embedded_asset!(app, "alo_fragment.wgsl");
+        load_shader_library!(app, "alo_bindings.wesl");
+        embedded_asset!(app, "alo_fragment.wesl");
         let team_colors_buffer =
             app.world_mut()
                 .add_asset(ShaderBuffer::from(vec![[1.0f32, 0.0, 1.0, 0.0]; 32]));
@@ -69,12 +67,8 @@ impl AloMaterialExtension {
 }
 
 impl MaterialExtension for AloMaterialExtension {
-    fn vertex_shader() -> ShaderRef {
-        "embedded://bevy_alo/materials/alo_vertex.wgsl".into()
-    }
-
     fn fragment_shader() -> ShaderRef {
-        "embedded://bevy_alo/materials/alo_fragment.wgsl".into()
+        "embedded://bevy_alo/materials/alo_fragment.wesl".into()
     }
 
     fn specialize(
@@ -87,7 +81,11 @@ impl MaterialExtension for AloMaterialExtension {
             .bind_group_data
             .contains(AloMaterialExtensionKey::TEAM_COLOR)
         {
-            descriptor.vertex.shader_defs.push("ALO_TEAM_COLOR".into());
+            // Force instance index so we can read it in our fragment shader.
+            descriptor
+                .vertex
+                .shader_defs
+                .push("VERTEX_OUTPUT_INSTANCE_INDEX".into());
         }
         if let Some(ref mut fragment) = descriptor.fragment {
             if key
@@ -95,6 +93,9 @@ impl MaterialExtension for AloMaterialExtension {
                 .contains(AloMaterialExtensionKey::TEAM_COLOR)
             {
                 fragment.shader_defs.push("ALO_TEAM_COLOR".into());
+                fragment
+                    .shader_defs
+                    .push("VERTEX_OUTPUT_INSTANCE_INDEX".into());
             }
             if key.bind_group_data.contains(AloMaterialExtensionKey::GLOSS) {
                 fragment.shader_defs.push("ALO_GLOSS".into());

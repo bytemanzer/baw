@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy_ecs = "^0.19.1"
-bevy_scene = "^0.19.1"
-bevy_transform = "^0.19.1"
+bevy_ecs = "0.20.1"
+bevy_scene = "0.20.1"
+bevy_transform = "0.20.1"
