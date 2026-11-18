@@ -4,16 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bitflags = "^2.11.1"
-bytemuck = { version = "^1.25.0", features = ["extern_crate_alloc"] }
+bitflags = "2.13.2"
+bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 serde = { version = "1.0.229", features = ["derive"] }
-thiserror = "^2.0.18"
+thiserror = "2.0.21"
 
 baw-scene-util = { version = "0.1.0", path = "../baw-scene-util" }
 petro-alo = { version = "0.1.0", path = "../petro-alo" }
 
 [dependencies.bevy]
-version = "0.19.1"
+version = "0.20.1"
 default-features = false
 features = [
     "bevy_camera",

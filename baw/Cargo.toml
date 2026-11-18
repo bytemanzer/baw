@@ -9,24 +9,18 @@ physics-debug = ["avian3d/debug-plugin"]
 
 [dependencies]
 anyhow = "1.0.104"
-bevy = { version = "0.19.1", features = ["debug", "dds"] }
-bevy_panorbit_camera = "0.35.0"
-clap = { version = "^4.6.1", features = ["derive"] }
-ron = "0.12.2"
+clap = { version = "4.6.8", features = ["derive"] }
+ron = "0.12.3"
 serde = { version = "1.0.229", features = ["derive"] }
 
 baw-ships = { version = "0.1.0", path = "../baw-ships" }
 bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
 
 [dependencies.avian3d]
-version = "^0.7.0"
+version = "0.8.0"
 default-features = false
-features = [
-    "3d",
-    "f32",
-    "collider-from-mesh",
-    "parry-f32",
-    "parallel",
-    "bevy_scene",
-    "bevy_picking",
-]
+features = ["3d", "collider-from-mesh", "parry-f32", "parallel", "bevy_scene", "bevy_picking"]
+
+[dependencies.bevy]
+version = "0.20.1"
+features = ["debug", "dds", "bevy_camera_controller", "pan_orbit_camera"]

@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.102"
-bitflags = "2.11.1"
-glam = "0.32.1"
-regex = "1.12.3"
-thiserror = "2.0.18"
+anyhow = "1.0.104"
+bitflags = "2.13.2"
+glam = "0.33.12"
+regex = "1.13.2"
+thiserror = "2.0.21"
 
 petro-chunked = { version = "0.1.0", path = "../petro-chunked", features = ["glam"] }
 
 [dev-dependencies]
-clap = { version = "^4.6.1", features = ["derive"] }
-tracing-subscriber = "^0.3.23"
+clap = { version = "4.6.8", features = ["derive"] }
+tracing-subscriber = "0.3.23"
