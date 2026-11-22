@@ -219,7 +219,7 @@ impl<'a> FileWriter<'a> {
     }
 
     /// Copy the given asset to the specified destination path.
-    #[instrument(err, skip_all, level = Level::DEBUG, fields(asset = asset.path().as_str(), dest))]
+    #[instrument(err(Debug), skip_all, level = Level::DEBUG, fields(asset = asset.path().as_str(), dest))]
     pub async fn copy_asset(&self, asset: &'a Asset, dest: PathBuf) -> anyhow::Result<()> {
         self.insert_write(&dest, WriteType::Asset { original: asset })?;
         if self.config.dry_run {

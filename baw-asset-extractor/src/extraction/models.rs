@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ain::ain;
 use anyhow::{Context as _, bail};
 use bevy_alo::models::{AloLoader, AloMeta};
 use bevy_asset::AssetPath;
@@ -62,6 +64,10 @@ impl<'a, 'p> ModelExtractor<'a, 'p> {
         let mut output_model_file = self.prefix.join("art");
         output_model_file.push("models");
         output_model_file.push(file_name);
+        // Some model name references don't include the extension. Ensure we set an extension here.
+        if output_model_file.extension() != Some(OsStr::new("alo")) {
+            output_model_file.set_extension("alo");
+        }
         Ok(output_model_file)
     }
 
@@ -95,7 +101,7 @@ impl<'a, 'p> ModelExtractor<'a, 'p> {
     /// model will have in the output directory, including any relevant prefix.
     ///
     /// The model name should be the bare model name, no directory.
-    #[instrument(err, skip_all, fields(model.name = name.as_str()))]
+    #[instrument(err(Debug), skip_all, fields(model.name = name.as_str()))]
     pub async fn find_model(
         &'p self,
         ctx: &ProcessorContext<'p>,
@@ -110,10 +116,24 @@ impl<'a, 'p> ModelExtractor<'a, 'p> {
         }
 
         const MODELS: &MegPath = meg_path!("Data\\Art\\Models");
-        let path = MODELS.join(name);
+        let mut path = MODELS.join(name);
         let asset = match self.fs.get(&path) {
             Some(asset) => asset,
-            None => bail!("Model {name} not found in {MODELS}"),
+            None => {
+                // If the file name didn't exist, try appending .alo extension, as some model files
+                // are referenced without a filename.
+                path.add_extension(ain!("alo"))
+                    .with_context(|| format!("Failed to add '.alo' extension to {name}"))?;
+                match self.fs.get(&path) {
+                    Some(asset) => asset,
+                    None => {
+                        // If the model doesn't exist, we still return a "real" path for it, but
+                        // loading it will fail at runtime in bevy, which is totally fine.
+                        warn!("Model {name} not found in {MODELS}");
+                        return Ok(output_model_file);
+                    }
+                }
+            }
         };
 
         ctx.spawn(self.output.copy_asset(asset, output_model_file.clone()))

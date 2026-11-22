@@ -4,11 +4,11 @@ members = [
     "baw",
     "baw-asset-extractor",
     "baw-asset-extractor-cli",
-    "baw-ships",
+    "baw-game-object",
     "baw-scene-util",
     "bevy-alo",
     "petro-alo",
-    "petro-chunked", "baw-config",
+    "petro-chunked",
 ]
 
 [profile.dev]

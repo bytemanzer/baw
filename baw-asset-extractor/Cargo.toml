@@ -18,11 +18,12 @@ thiserror = "2.0.21"
 tracing = "0.1.44"
 walkdir = "2.5.0"
 
-baw-config = { version = "0.1.0", path = "../baw-config" }
+baw-game-object = { version = "0.1.0", path = "../baw-game-object" }
 bevy-alo = { version = "0.1.0", path = "../bevy-alo" }
 petro-alo = { version = "0.1.0", path = "../petro-alo" }
+heck = "0.5.0"
 
 [dependencies.petro-meg]
-version = "1.1.0"
+version = "1.1.1"
 default-features = false
 features = ["v1", "reader"]

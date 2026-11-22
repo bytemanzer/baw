@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use baw_ships::ShipsPlugin;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
+use baw_game_object::GameObjectPlugin;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::scene::CachedSceneAsset;
 use bevy_alo::AloPlugins;
 use bevy_alo::billboard::AloBillboardSystemSet;
 use bevy_alo::components::{AloBone, AloCamera};
+use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, PanOrbitCameraSystemSet};
 use clap::Parser;
 
 use crate::physics::BawPhysicsPlugins;
@@ -43,10 +43,13 @@ impl Plugin for BawPlugin {
             AloPlugins::new(),
             PanOrbitCameraPlugin,
             BawPhysicsPlugins::new(),
-            ShipsPlugin,
+            GameObjectPlugin,
         ))
         .insert_resource(ClearColor(Srgba::BLACK.into()))
-        .configure_sets(PostUpdate, PanOrbitCameraSystemSet.before(AloBillboardSystemSet))
+        .configure_sets(
+            PostUpdate,
+            PanOrbitCameraSystemSet.before(AloBillboardSystemSet),
+        )
         .add_systems(Startup, (setup, spawn_from_cli))
         .add_systems(Update, draw_bones);
     }

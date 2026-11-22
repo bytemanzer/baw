@@ -559,7 +559,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "avian3d",
- "baw-ships",
+ "baw-game-object",
  "bevy",
  "bevy-alo",
  "bevy_panorbit_camera",
@@ -574,12 +574,13 @@ version = "0.1.0"
 dependencies = [
  "ain",
  "anyhow",
- "baw-config",
+ "baw-game-object",
  "bevy-alo",
  "bevy_asset",
  "bevy_reflect",
  "easy-parallel",
  "encoding_rs",
+ "heck",
  "petro-alo",
  "petro-meg",
  "quick-xml 0.42.0",
@@ -603,11 +604,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "baw-config"
+name = "baw-game-object"
 version = "0.1.0"
 dependencies = [
- "bevy_asset",
- "bevy_reflect",
+ "anyhow",
+ "baw-scene-util",
+ "bevy",
+ "ron",
  "serde",
 ]
 
@@ -618,18 +621,6 @@ dependencies = [
  "bevy_ecs",
  "bevy_scene",
  "bevy_transform",
-]
-
-[[package]]
-name = "baw-ships"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "baw-config",
- "baw-scene-util",
- "bevy",
- "ron",
- "serde",
 ]
 
 [[package]]
@@ -5003,9 +4994,9 @@ dependencies = [
 
 [[package]]
 name = "petro-meg"
-version = "1.1.0"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "114fa34c9c81f6497bde74e00a1ec99ebe596323ebbcaa08babe71b7de6953ac"
+checksum = "97fb73ca58b063cacc80451ef64279fc566d63b4cbccb6b7173bbca9aa0cfb35"
 dependencies = [
  "ain",
  "byteorder",

@@ -69,7 +69,7 @@ fn main() {
     let args = Args::parse();
 
     let fs = build_fs_view(&args.src).unwrap_or_else(|err| {
-        eprintln!("Unable to build filesystem view: {err}");
+        eprintln!("Unable to build filesystem view: {err:#}");
         exit(1);
     });
 
@@ -88,7 +88,7 @@ fn main() {
 
     let num_threads = choose_num_threads(args.num_threads);
     if let Err(err) = run_processing(args.prefix, num_threads, &fs, &output) {
-        eprintln!("Failed to extract game assets: {err}");
+        eprintln!("Failed to extract game assets: {err:#}");
         exit(1);
     }
 
@@ -159,7 +159,7 @@ fn run_processing<'a>(
 
     Processor::new()
         .num_threads(num_threads)
-        .run(|ctx| configs.extract_data_files(ctx))
+        .run(|ctx| configs.extract_configs(ctx))
 }
 
 /// Print all the files written to the FileWriter.

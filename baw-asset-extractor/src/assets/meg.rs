@@ -179,7 +179,7 @@ pub(crate) fn find_mega_assets(filesystem: &FileSystemView) -> anyhow::Result<Me
             }
         };
         match source.real_path() {
-            Some(path) => meg_file_real_paths.push((asset_path, path.into())),
+            Some(path) => meg_file_real_paths.push((asset_path.into(), path.into())),
             None => bail!(
                 "MEGA file {asset_path} must be a real on disk file, but was {}",
                 source.describe_source()
