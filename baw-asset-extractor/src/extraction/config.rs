@@ -212,7 +212,7 @@ impl<'a, 'p> ConfigExtractor<'a, 'p> {
         path.push(collection);
         path.push(kind);
         path.push(name);
-        path.set_extension("gos");
+        path.add_extension("gos");
         Ok(path)
     }
 }

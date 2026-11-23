@@ -274,6 +274,7 @@ impl<'a> FileWriter<'a> {
     }
 
     /// Output some generated configuration as Ron.
+    #[instrument(err(Debug), skip_all, level = Level::DEBUG, fields(asset = std::any::type_name::<T>(), dest))]
     pub async fn generate_conf<T: Serialize>(&self, conf: T, dest: PathBuf) -> anyhow::Result<()> {
         let write_type = WriteType::GenConf {
             config_type: std::any::type_name::<T>(),
