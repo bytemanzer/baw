@@ -1,7 +1,8 @@
-use petro_chunked::byteblock::ConvertBytes;
+use petro_chunked::byteblock::{ConvertBytes, FromByteBlock};
+use petro_chunked::wire_types::{U8Bool, U32Bool, U32Usize, U32UsizeVec};
 use petro_chunked::{
-    FromByteBlock, FromChunks, FromMiniChunks, U8Bool, U32Bool, U32Usize, U32UsizeVec,
-    iter_chunks, iter_mini_chunks,
+    ChunkErrorKind, ChunkStreamItem, ChunkStructure, MiniChunkStructure, iter_chunks,
+    iter_mini_chunks,
 };
 
 /// Helper to build a full 32-bit chunk buffer in tests.
@@ -69,8 +70,8 @@ fn test_derive_from_byte_block() {
 }
 
 #[test]
-fn test_derive_from_mini_chunks_map_and_ignore_unknown() {
-    #[derive(FromMiniChunks, Debug, PartialEq)]
+fn test_derive_mini_chunk_structure_map_and_ignore_unknown() {
+    #[derive(MiniChunkStructure, Debug, PartialEq)]
     #[mini_chunk(map, ignore_unknown)]
     struct ProxyConn<'b> {
         #[mini_chunk(0x05)]
@@ -111,8 +112,8 @@ fn test_derive_from_mini_chunks_map_and_ignore_unknown() {
 }
 
 #[test]
-fn test_derive_from_mini_chunks_sequence() {
-    #[derive(FromMiniChunks, Debug, PartialEq)]
+fn test_derive_mini_chunk_structure_sequence() {
+    #[derive(MiniChunkStructure, Debug, PartialEq)]
     #[mini_chunk(sequence)]
     struct AnimHeader {
         #[mini_chunk(0x01, wire_format = U32Usize)]
@@ -143,8 +144,8 @@ fn test_derive_from_mini_chunks_sequence() {
 }
 
 #[test]
-fn test_derive_from_chunks_submesh_pairs_and_enums() {
-    #[derive(FromMiniChunks, Debug, PartialEq)]
+fn test_derive_chunk_structure_and_chunk_stream_item() {
+    #[derive(MiniChunkStructure, Debug, PartialEq)]
     #[mini_chunk(sequence)]
     struct ParamEntry<'b, T: FromByteBlock<'b>> {
         #[mini_chunk(0x01)]
@@ -153,7 +154,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
         value: T,
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStreamItem, Debug, PartialEq)]
     enum RawShaderParam<'b> {
         #[chunk(0x0001_0102, mini_chunks)]
         Int(ParamEntry<'b, i32>),
@@ -163,7 +164,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
         Texture(ParamEntry<'b, &'b str>),
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStructure, Debug, PartialEq)]
     #[chunk(sequence)]
     struct RawShader<'b> {
         #[chunk(0x0001_0101)]
@@ -172,7 +173,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
         params: Vec<RawShaderParam<'b>>,
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStreamItem, Debug, PartialEq)]
     enum RawVertexBuf {
         #[chunk(0x0001_0005)]
         V1(Vec<u32>),
@@ -180,7 +181,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
         V2(Vec<u16>),
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStructure, Debug, PartialEq)]
     #[chunk(map)]
     struct RawSubmeshData<'b> {
         #[chunk(0x0001_0002)]
@@ -194,8 +195,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
     }
 
     /// Multi-chunk sequence struct: each submesh is a pair of sibling chunks `(0x10100, 0x10000)`.
-    #[derive(FromChunks, Debug, PartialEq)]
-    #[chunk(sequence)]
+    #[derive(ChunkStreamItem, Debug, PartialEq)]
     struct RawSubmesh<'b> {
         #[chunk(0x0001_0100, children)]
         material: RawShader<'b>,
@@ -203,7 +203,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
         data: RawSubmeshData<'b>,
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStructure, Debug, PartialEq)]
     #[chunk(sequence)]
     struct RawMesh<'b> {
         #[chunk(0x0000_0401)]
@@ -257,7 +257,7 @@ fn test_derive_from_chunks_submesh_pairs_and_enums() {
 
 #[test]
 fn test_derive_particle_heterogeneous_tracks_with_same_chunk_ids() {
-    #[derive(FromMiniChunks, Debug, PartialEq)]
+    #[derive(MiniChunkStructure, Debug, PartialEq)]
     #[mini_chunk(sequence)]
     struct TrackProps<T: for<'b> FromByteBlock<'b>> {
         #[mini_chunk(0x02)]
@@ -268,15 +268,14 @@ fn test_derive_particle_heterogeneous_tracks_with_same_chunk_ids() {
         interpolation: u32,
     }
 
-    #[derive(FromMiniChunks, Debug, PartialEq)]
+    #[derive(MiniChunkStructure, Debug, PartialEq)]
     #[mini_chunk(map)]
     struct TrackData<T: for<'b> FromByteBlock<'b>> {
         #[mini_chunk(0x05, repeated)]
         keys: Vec<(T, f32)>,
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
-    #[chunk(sequence)]
+    #[derive(ChunkStreamItem, Debug, PartialEq)]
     struct ByteTrack {
         #[chunk(0x0, mini_chunks)]
         props: TrackProps<u8>,
@@ -284,8 +283,7 @@ fn test_derive_particle_heterogeneous_tracks_with_same_chunk_ids() {
         data: TrackData<u32>,
     }
 
-    #[derive(FromChunks, Debug, PartialEq)]
-    #[chunk(sequence)]
+    #[derive(ChunkStreamItem, Debug, PartialEq)]
     struct FloatTrack {
         #[chunk(0x0, mini_chunks)]
         props: TrackProps<f32>,
@@ -295,7 +293,7 @@ fn test_derive_particle_heterogeneous_tracks_with_same_chunk_ids() {
 
     /// Like `alo-particle`'s emitter tracks chunk (0x1): positional tracks that all share chunk
     /// IDs (0x0, 0x1) but decode different types (`ByteTrack` vs `FloatTrack`) depending on position!
-    #[derive(FromChunks, Debug, PartialEq)]
+    #[derive(ChunkStructure, Debug, PartialEq)]
     #[chunk(sequence)]
     struct EmitterTracks {
         #[chunk(stream)]
@@ -333,4 +331,32 @@ fn test_derive_particle_heterogeneous_tracks_with_same_chunk_ids() {
     assert_eq!(tracks.size.props.first_key, 1.5);
     assert_eq!(tracks.size.props.last_key, 4.0);
     assert!(tracks.size.data.keys.is_empty());
+}
+
+#[test]
+fn test_chunk_error_v2_context_stack() {
+    #[derive(ChunkStructure, Debug)]
+    #[chunk(sequence)]
+    struct Inner {
+        #[chunk(0x1001, wire_format = U32Bool)]
+        _flag: bool,
+    }
+
+    #[derive(ChunkStructure, Debug)]
+    #[chunk(sequence)]
+    struct Outer {
+        #[chunk(0x1000, children)]
+        _inner: Inner,
+    }
+
+    let inner_bytes = make_chunk(0x1001, false, &2u32.to_le_bytes());
+    let outer_bytes = make_chunk(0x1000, true, &inner_bytes);
+
+    let err = iter_chunks(&outer_bytes).expect_struct::<Outer>().unwrap_err();
+    assert_eq!(err.kind(), ChunkErrorKind::InvalidValue);
+    let rendered = err.to_string();
+    assert_eq!(
+        rendered,
+        "Error InvalidValue: Expected a boolean value (0 or 1), but found 2\n    - while parsing chunk 0x00001001\n    - while parsing chunk 0x00001000"
+    );
 }

@@ -1,10 +1,9 @@
-use thiserror::Error;
-
-use crate::ChunkError;
 use crate::byteblock::{ConvertBytes, FromByteBlock, FromFixedByteBlock, TakeBytes};
 use crate::content::DataOrMiniChunks;
-use crate::error::ChunkErrorContext;
+use crate::error::{ChunkError, ChunkErrorContext, ChunkErrorV2};
 use crate::minichunk::MiniChunkStructure;
+#[cfg(feature = "derive")]
+pub use petro_chunked_derive::{ChunkStreamItem, ChunkStructure};
 
 /// Interprets the bytes as containing chunks and gets an iterator over them.
 pub fn iter_chunks<'b>(data: &'b [u8]) -> ChunksIter<'b> {
@@ -58,18 +57,18 @@ impl<'b> ChunksIter<'b> {
     }
 
     /// Applies a structure collector to this chunk iterator.
-    pub fn expect_struct<C: ChunkStructure<'b>>(self) -> Result<C, ChunkError> {
+    pub fn expect_struct<C: ChunkStructure<'b>>(self) -> Result<C, ChunkErrorV2> {
         C::collect(self)
     }
 
     /// Pulls a single stream item (such as a chunk-tagged enum or a sequence struct spanning
     /// one or more chunks) from this chunk iterator.
-    pub fn expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<I, ChunkError> {
+    pub fn expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<I, ChunkErrorV2> {
         I::take_from_chunks(self)
     }
 
     /// Pulls a single stream item if the next chunk ID matches the item's starting chunk ID.
-    pub fn try_expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<Option<I>, ChunkError> {
+    pub fn try_expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<Option<I>, ChunkErrorV2> {
         if let Some(id) = self.peek_id()?
             && I::matches_start(id)
         {
@@ -193,32 +192,35 @@ impl<'b> Chunk<'b> {
     }
 
     /// Reads this chunk's plain data content as `T`, wrapping any error with this chunk's ID.
-    pub fn read_data<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkError> {
+    pub fn read_data<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkErrorV2> {
         self.data()
             .and_then(|d| d.convert())
-            .err_to_data(self.id)
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
     }
 
     /// Reads this chunk's content as a mini-chunk structure `M`, wrapping any error with this
     /// chunk's ID.
-    pub fn read_mini_chunks<M: MiniChunkStructure<'b>>(&self) -> Result<M, ChunkError> {
+    pub fn read_mini_chunks<M: MiniChunkStructure<'b>>(&self) -> Result<M, ChunkErrorV2> {
         self.data()
             .and_then(|d| d.as_mini_chunks().expect_struct())
-            .err_to_data(self.id)
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
     }
 
     /// Reads this chunk's child chunks as a chunk structure `C`, wrapping any error with this
     /// chunk's ID.
-    pub fn read_children<C: ChunkStructure<'b>>(&self) -> Result<C, ChunkError> {
-        self.children()
-            .and_then(|c| c.expect_struct())
-            .err_to_data(self.id)
+    pub fn read_children<C: ChunkStructure<'b>>(&self) -> Result<C, ChunkErrorV2> {
+        let children = self
+            .children()
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))?;
+        children
+            .expect_struct()
+            .map_err(|e| e.err_to_data(self.id))
     }
 }
 
 /// A structure which is produced by consuming an entire [`ChunksIter`].
 pub trait ChunkStructure<'b>: Sized {
-    fn collect(chunks: ChunksIter<'b>) -> Result<Self, ChunkError>;
+    fn collect(chunks: ChunksIter<'b>) -> Result<Self, ChunkErrorV2>;
 }
 
 /// An item which is produced by pulling one or more chunks from a [`ChunksIter`].
@@ -231,108 +233,7 @@ pub trait ChunkStreamItem<'b>: Sized {
     fn matches_start(id: u32) -> bool;
 
     /// Pulls one instance of `Self` from the chunk iterator.
-    fn take_from_chunks(chunks: &mut ChunksIter<'b>) -> Result<Self, ChunkError>;
-}
-
-/// Format errors when handling chunks as a map.
-#[derive(Error, Debug)]
-pub enum ChunkMapFormatError {
-    #[error("Found unexpected Chunk {id:0>8x}")]
-    UnexpectedChunk { id: u32 },
-    #[error("Chunk {id:0>8x} ({name}) appeared more than once")]
-    DuplicateChunk { id: u32, name: &'static str },
-    #[error("Chunk {id:0>8x} ({name}) was required but not found")]
-    MissingRequiredChunk { id: u32, name: &'static str },
-}
-
-/// Collection helper for required map-mode chunks.
-#[doc(hidden)]
-pub struct RequiredChunkEntry<T>(Option<T>);
-
-impl<T> RequiredChunkEntry<T> {
-    pub fn new() -> Self {
-        Self(None)
-    }
-
-    pub fn add_value(&mut self, id: u32, name: &'static str, value: T) -> Result<(), ChunkError> {
-        if self.0.is_none() {
-            self.0 = Some(value);
-            Ok(())
-        } else {
-            Err(ChunkError::FormatError(
-                ChunkMapFormatError::DuplicateChunk { id, name }.into(),
-            ))
-        }
-    }
-
-    pub fn finish(self, id: u32, name: &'static str) -> Result<T, ChunkError> {
-        match self.0 {
-            Some(val) => Ok(val),
-            None => Err(ChunkError::FormatError(
-                ChunkMapFormatError::MissingRequiredChunk { id, name }.into(),
-            )),
-        }
-    }
-}
-
-/// Collection helper for optional or default map-mode chunks.
-#[doc(hidden)]
-pub struct OptionalChunkEntry<T>(Option<T>);
-
-impl<T> OptionalChunkEntry<T> {
-    pub fn new() -> Self {
-        Self(None)
-    }
-
-    pub fn add_value(&mut self, id: u32, name: &'static str, value: T) -> Result<(), ChunkError> {
-        if self.0.is_none() {
-            self.0 = Some(value);
-            Ok(())
-        } else {
-            Err(ChunkError::FormatError(
-                ChunkMapFormatError::DuplicateChunk { id, name }.into(),
-            ))
-        }
-    }
-
-    pub fn finish(self, _id: u32, _name: &str) -> Result<Option<T>, ChunkError> {
-        Ok(self.0)
-    }
-
-    pub fn finish_or_default(self) -> Result<T, ChunkError>
-    where
-        T: Default,
-    {
-        Ok(self.0.unwrap_or_default())
-    }
-
-    pub fn finish_or_else(self, f: impl FnOnce() -> T) -> Result<T, ChunkError> {
-        Ok(self.0.unwrap_or_else(f))
-    }
-}
-
-/// Collection helper for repeated map-mode chunks.
-#[doc(hidden)]
-pub struct RepeatedChunkEntry<T>(Vec<T>);
-
-impl<T> RepeatedChunkEntry<T> {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn add_value(&mut self, _id: u32, _name: &str, value: T) -> Result<(), ChunkError> {
-        self.0.push(value);
-        Ok(())
-    }
-
-    pub fn finish(self, _id: u32, _name: &str) -> Result<Vec<T>, ChunkError> {
-        Ok(self.0)
-    }
-}
-
-#[doc(hidden)]
-pub fn unexpected_chunk(id: u32) -> ChunkError {
-    ChunkError::FormatError(ChunkMapFormatError::UnexpectedChunk { id }.into())
+    fn take_from_chunks(chunks: &mut ChunksIter<'b>) -> Result<Self, ChunkErrorV2>;
 }
 
 /// Helper to unpack the chunk kind from the chunk length.

@@ -43,28 +43,26 @@ pub fn derive_from_byte_block(input: TokenStream) -> TokenStream {
 ///   `Default::default()` or `<expr>` if absent.
 /// - `wire_format = <Type>`: Specifies the wire type for a single mini-chunk's body. Reads `<Type>`
 ///   from the mini-chunk and converts it into the per-chunk body type `T` via `From::from`.
-#[proc_macro_derive(FromMiniChunks, attributes(mini_chunk))]
-pub fn derive_from_mini_chunks(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(MiniChunkStructure, attributes(mini_chunk))]
+pub fn derive_mini_chunk_structure(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    expand_from_mini_chunks(input)
+    expand_mini_chunk_structure(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 
-/// Derives `petro_chunked::chunks::ChunkStructure` (and `ChunkStreamItem` for enums and
-/// `#[chunk(sequence)]` structs).
+/// Derives `petro_chunked::chunks::ChunkStructure` for a struct.
 ///
 /// ### Container Attributes (`#[chunk(...)]` on structs)
 /// You must explicitly specify either `map` or `sequence` on structs:
 /// - `map`: Read fields as an unordered map keyed by chunk ID.
-/// - `sequence`: Read fields in strict declaration order. Also implements `ChunkStreamItem` so this
-///   struct can be embedded as a multi-chunk sequence item (e.g. a submesh `(0x10100, 0x10000)` pair
-///   or particle track `(0x0, 0x1)` pair).
+/// - `sequence`: Read fields in strict declaration order.
 /// - `ignore_unknown`: Ignore unrecognized chunk IDs instead of returning an error.
 ///
 /// ### Field Attributes (`#[chunk(...)]`)
 /// - `<id>` or `stream`: Either a `u32` chunk ID expression, or `stream` to delegate to a type
-///   implementing `ChunkStreamItem` (such as a chunk-tagged enum or a `#[chunk(sequence)]` struct).
+///   implementing `ChunkStreamItem` (such as a chunk-tagged enum or a `#[derive(ChunkStreamItem)]`
+///   sequence struct).
 /// - Payload mode (for `<id>` fields):
 ///   - `data` (default): Reads leaf bytes via `chunk.read_data::<T>()` (`FromByteBlock`).
 ///   - `mini_chunks`: Reads leaf mini-chunks via `chunk.read_mini_chunks::<T>()` (`MiniChunkStructure`).
@@ -80,10 +78,21 @@ pub fn derive_from_mini_chunks(input: TokenStream) -> TokenStream {
 ///   - `default` / `default = <expr>`: 0 or 1 occurrence, falling back to `Default::default()` or `<expr>`.
 /// - `wire_format = <Type>`: Specifies the wire type for a single chunk's body. Reads `<Type>` from
 ///   the chunk and converts it into the per-chunk body type `T` via `From::from`.
-#[proc_macro_derive(FromChunks, attributes(chunk))]
-pub fn derive_from_chunks(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(ChunkStructure, attributes(chunk))]
+pub fn derive_chunk_structure(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    expand_from_chunks(input)
+    expand_chunk_structure(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Derives `petro_chunked::chunks::ChunkStreamItem` for a chunk-tagged enum or a sequential
+/// multi-chunk struct (e.g., a submesh `(0x10100, 0x10000)` pair or particle track `(0x0, 0x1)`
+/// pair).
+#[proc_macro_derive(ChunkStreamItem, attributes(chunk))]
+pub fn derive_chunk_stream_item(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    expand_chunk_stream_item(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -160,7 +169,7 @@ fn parse_byte_block_attrs(attrs: &[Attribute], allow_wire_format: bool) -> Resul
 fn expand_from_byte_block(input: DeriveInput) -> Result<TokenStream2> {
     let Data::Struct(data) = &input.data else {
         return Err(Error::new_spanned(
-            &input,
+            &input.ident,
             "FromByteBlock can only be derived for structs",
         ));
     };
@@ -271,17 +280,16 @@ fn extract_generic_inner<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
     }
 }
 
-#[derive(Clone)]
-enum Cardinality {
+enum Cardinality<'a> {
     Required,
-    Optional(Type),
+    Optional(&'a Type),
     Default,
     DefaultExpr(Expr),
-    Repeated(Type),
+    Repeated(&'a Type),
 }
 
 // =================================================================================================
-// FromMiniChunks
+// MiniChunkStructure
 // =================================================================================================
 
 struct MiniChunkContainerAttrs {
@@ -322,7 +330,7 @@ fn parse_mini_chunk_container_attrs(input: &DeriveInput) -> Result<MiniChunkCont
     let Some(mode) = mode else {
         return Err(Error::new_spanned(
             &input.ident,
-            "FromMiniChunks requires an explicit `#[mini_chunk(map)]` or `#[mini_chunk(sequence)]` attribute on the struct",
+            "MiniChunkStructure requires an explicit `#[mini_chunk(map)]` or `#[mini_chunk(sequence)]` attribute on the struct",
         ));
     };
 
@@ -332,11 +340,11 @@ fn parse_mini_chunk_container_attrs(input: &DeriveInput) -> Result<MiniChunkCont
     })
 }
 
-struct MiniChunkFieldSpec {
-    ident: Ident,
-    ty: Type,
+struct MiniChunkFieldSpec<'a> {
+    ident: &'a Ident,
+    ty: &'a Type,
     id: Expr,
-    cardinality: Cardinality,
+    cardinality: Cardinality<'a>,
     wire_format: Option<Type>,
 }
 
@@ -399,17 +407,17 @@ impl Parse for MiniChunkFieldAttrParsed {
     }
 }
 
-fn parse_mini_chunk_field(field: &syn::Field) -> Result<MiniChunkFieldSpec> {
+fn parse_mini_chunk_field<'a>(field: &'a syn::Field) -> Result<MiniChunkFieldSpec<'a>> {
     let ident = field
         .ident
-        .clone()
-        .ok_or_else(|| Error::new_spanned(field, "FromMiniChunks requires named fields"))?;
+        .as_ref()
+        .ok_or_else(|| Error::new_spanned(&field.ty, "MiniChunkStructure requires named fields"))?;
     let mut parsed_attr: Option<MiniChunkFieldAttrParsed> = None;
     for attr in &field.attrs {
         if attr.path().is_ident("mini_chunk") {
             if parsed_attr.is_some() {
                 return Err(Error::new_spanned(
-                    attr,
+                    &attr.meta,
                     "duplicate #[mini_chunk] attribute",
                 ));
             }
@@ -418,32 +426,28 @@ fn parse_mini_chunk_field(field: &syn::Field) -> Result<MiniChunkFieldSpec> {
     }
     let Some(parsed) = parsed_attr else {
         return Err(Error::new_spanned(
-            field,
+            ident,
             "missing #[mini_chunk(<id>)] attribute on field",
         ));
     };
 
-    let ty = field.ty.clone();
+    let ty = &field.ty;
     let cardinality = if parsed.repeated {
-        let inner = extract_generic_inner(&ty, "Vec")
-            .ok_or_else(|| {
-                Error::new_spanned(&ty, "`repeated` mini_chunk field must have type `Vec<T>`")
-            })?
-            .clone();
+        let inner = extract_generic_inner(ty, "Vec").ok_or_else(|| {
+            Error::new_spanned(ty, "`repeated` mini_chunk field must have type `Vec<T>`")
+        })?;
         Cardinality::Repeated(inner)
     } else if let Some(expr) = parsed.default_expr {
         Cardinality::DefaultExpr(expr)
     } else if parsed.default {
         Cardinality::Default
     } else if parsed.optional {
-        let inner = extract_generic_inner(&ty, "Option")
-            .ok_or_else(|| {
-                Error::new_spanned(
-                    &ty,
-                    "`optional` mini_chunk field must have type `Option<T>`",
-                )
-            })?
-            .clone();
+        let inner = extract_generic_inner(ty, "Option").ok_or_else(|| {
+            Error::new_spanned(
+                ty,
+                "`optional` mini_chunk field must have type `Option<T>`",
+            )
+        })?;
         Cardinality::Optional(inner)
     } else {
         Cardinality::Required
@@ -475,17 +479,17 @@ fn decode_mini_chunk_expr(
     }
 }
 
-fn expand_from_mini_chunks(input: DeriveInput) -> Result<TokenStream2> {
+fn expand_mini_chunk_structure(input: DeriveInput) -> Result<TokenStream2> {
     let Data::Struct(data) = &input.data else {
         return Err(Error::new_spanned(
-            &input,
-            "FromMiniChunks can only be derived for structs",
+            &input.ident,
+            "MiniChunkStructure can only be derived for structs",
         ));
     };
     let Fields::Named(named) = &data.fields else {
         return Err(Error::new_spanned(
-            &input,
-            "FromMiniChunks requires a struct with named fields",
+            &input.ident,
+            "MiniChunkStructure requires a struct with named fields",
         ));
     };
 
@@ -505,8 +509,8 @@ fn expand_from_mini_chunks(input: DeriveInput) -> Result<TokenStream2> {
         let c_var = format_ident!("__c");
 
         for spec in &specs {
-            let fident = &spec.ident;
-            let fty = &spec.ty;
+            let fident = spec.ident;
+            let fty = spec.ty;
             let id = &spec.id;
             match &spec.cardinality {
                 Cardinality::Required => {
@@ -584,40 +588,40 @@ fn expand_from_mini_chunks(input: DeriveInput) -> Result<TokenStream2> {
         let chunk_var = format_ident!("__chunk");
 
         for spec in &specs {
-            let fident = &spec.ident;
+            let fident = spec.ident;
             let fname_str = fident.to_string();
-            let fty = &spec.ty;
+            let fty = spec.ty;
             let id = &spec.id;
 
             let (collector_init, inner_ty, finish_expr) = match &spec.cardinality {
                 Cardinality::Required => (
-                    quote!(::petro_chunked::minichunk::RequiredMapEntry::<#fty>::new()),
-                    fty.clone(),
+                    quote!(::petro_chunked::_macro_util::RequiredMapEntry::<#fty>::new()),
+                    fty,
                     quote!(#fident.finish(#id, #fname_str)?),
                 ),
                 Cardinality::Optional(inner) => (
-                    quote!(::petro_chunked::minichunk::OptionalMapEntry::<#inner>::new()),
-                    inner.clone(),
+                    quote!(::petro_chunked::_macro_util::OptionalMapEntry::<#inner>::new()),
+                    *inner,
                     quote!(#fident.finish(#id, #fname_str)?),
                 ),
                 Cardinality::Default => (
-                    quote!(::petro_chunked::minichunk::OptionalMapEntry::<#fty>::new()),
-                    fty.clone(),
+                    quote!(::petro_chunked::_macro_util::OptionalMapEntry::<#fty>::new()),
+                    fty,
                     quote!(#fident.finish_or_default()?),
                 ),
                 Cardinality::DefaultExpr(expr) => (
-                    quote!(::petro_chunked::minichunk::OptionalMapEntry::<#fty>::new()),
-                    fty.clone(),
+                    quote!(::petro_chunked::_macro_util::OptionalMapEntry::<#fty>::new()),
+                    fty,
                     quote!(#fident.finish_or_else(|| #expr)?),
                 ),
                 Cardinality::Repeated(inner) => (
-                    quote!(::petro_chunked::minichunk::RepeatedMapEntry::<#inner>::new()),
-                    inner.clone(),
+                    quote!(::petro_chunked::_macro_util::RepeatedMapEntry::<#inner>::new()),
+                    *inner,
                     quote!(#fident.finish(#id, #fname_str)?),
                 ),
             };
 
-            let decoded = decode_mini_chunk_expr(&inner_ty, &spec.wire_format, &chunk_var);
+            let decoded = decode_mini_chunk_expr(inner_ty, &spec.wire_format, &chunk_var);
 
             collectors.push(quote! {
                 let mut #fident = #collector_init;
@@ -635,7 +639,7 @@ fn expand_from_mini_chunks(input: DeriveInput) -> Result<TokenStream2> {
         let fallback_arm = if container_attrs.ignore_unknown {
             quote!(_ => {})
         } else {
-            quote!(__id => return ::std::result::Result::Err(::petro_chunked::minichunk::unexpected_chunk(__id)))
+            quote!(__id => return ::std::result::Result::Err(::petro_chunked::_macro_util::unexpected_mini_chunk(__id)))
         };
 
         Ok(quote! {
@@ -659,11 +663,11 @@ fn expand_from_mini_chunks(input: DeriveInput) -> Result<TokenStream2> {
 }
 
 // =================================================================================================
-// FromChunks
+// ChunkStructure & ChunkStreamItem
 // =================================================================================================
 
 struct ChunkContainerAttrs {
-    mode: ContainerOrderMode,
+    mode: Option<ContainerOrderMode>,
     ignore_unknown: bool,
 }
 
@@ -697,13 +701,6 @@ fn parse_chunk_container_attrs(input: &DeriveInput) -> Result<ChunkContainerAttr
         })?;
     }
 
-    let Some(mode) = mode else {
-        return Err(Error::new_spanned(
-            &input.ident,
-            "FromChunks on a struct requires an explicit `#[chunk(map)]` or `#[chunk(sequence)]` attribute",
-        ));
-    };
-
     Ok(ChunkContainerAttrs {
         mode,
         ignore_unknown,
@@ -718,7 +715,6 @@ enum ChunkPayloadMode {
     Ignore,
 }
 
-#[derive(Clone)]
 enum ChunkSource {
     Id { id: Expr, mode: ChunkPayloadMode },
     Stream,
@@ -811,53 +807,49 @@ impl Parse for ChunkFieldAttrParsed {
     }
 }
 
-struct ChunkFieldSpec {
-    ident: Ident,
-    ty: Type,
+struct ChunkFieldSpec<'a> {
+    ident: &'a Ident,
+    ty: &'a Type,
     source: ChunkSource,
-    cardinality: Cardinality,
+    cardinality: Cardinality<'a>,
     wire_format: Option<Type>,
 }
 
-fn parse_chunk_field(field: &syn::Field) -> Result<ChunkFieldSpec> {
+fn parse_chunk_field<'a>(field: &'a syn::Field) -> Result<ChunkFieldSpec<'a>> {
     let ident = field
         .ident
-        .clone()
-        .ok_or_else(|| Error::new_spanned(field, "FromChunks struct requires named fields"))?;
+        .as_ref()
+        .ok_or_else(|| Error::new_spanned(&field.ty, "chunk struct requires named fields"))?;
     let mut parsed_attr: Option<ChunkFieldAttrParsed> = None;
     for attr in &field.attrs {
         if attr.path().is_ident("chunk") {
             if parsed_attr.is_some() {
-                return Err(Error::new_spanned(attr, "duplicate #[chunk] attribute"));
+                return Err(Error::new_spanned(&attr.meta, "duplicate #[chunk] attribute"));
             }
             parsed_attr = Some(attr.parse_args()?);
         }
     }
     let Some(parsed) = parsed_attr else {
         return Err(Error::new_spanned(
-            field,
+            ident,
             "missing #[chunk(...)] attribute on field",
         ));
     };
 
-    let ty = field.ty.clone();
+    let ty = &field.ty;
     let cardinality = if parsed.repeated {
-        let inner = extract_generic_inner(&ty, "Vec")
-            .ok_or_else(|| {
-                Error::new_spanned(&ty, "`repeated` chunk field must have type `Vec<T>`")
-            })?
-            .clone();
+        let inner = extract_generic_inner(ty, "Vec").ok_or_else(|| {
+            Error::new_spanned(ty, "`repeated` chunk field must have type `Vec<T>`")
+        })?;
         Cardinality::Repeated(inner)
     } else if let Some(expr) = parsed.default_expr {
         Cardinality::DefaultExpr(expr)
     } else if parsed.default {
         Cardinality::Default
     } else if parsed.optional {
-        let inner = extract_generic_inner(&ty, "Option")
-            .ok_or_else(|| {
-                Error::new_spanned(&ty, "`optional` chunk field must have type `Option<T>`")
-            })?
-            .clone();
+        let inner = extract_generic_inner(ty, "Option").ok_or_else(|| {
+            Error::new_spanned(ty, "`optional` chunk field must have type `Option<T>`")
+        })?;
         Cardinality::Optional(inner)
     } else {
         Cardinality::Required
@@ -895,22 +887,373 @@ fn decode_chunk_expr(
     }
 }
 
-fn expand_from_chunks(input: DeriveInput) -> Result<TokenStream2> {
+fn build_sequence_chunk_stmts(
+    specs: &[ChunkFieldSpec<'_>],
+    lt: &Lifetime,
+) -> (Vec<TokenStream2>, Vec<TokenStream2>, TokenStream2) {
+    let mut stmts = Vec::new();
+    let mut inits = Vec::new();
+    let chunk_var = format_ident!("__chunk");
+
+    for spec in specs {
+        let fident = spec.ident;
+        let fty = spec.ty;
+
+        match (&spec.source, &spec.cardinality) {
+            (ChunkSource::Id { id, mode }, Cardinality::Required) => {
+                let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
+                stmts.push(quote! {
+                    let #chunk_var = __chunks.expect_chunk(#id)?;
+                    let #fident: #fty = #decoded;
+                });
+            }
+            (ChunkSource::Id { id, mode }, Cardinality::Optional(inner)) => {
+                let decoded = decode_chunk_expr(*mode, inner, &spec.wire_format, &chunk_var);
+                stmts.push(quote! {
+                    let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
+                        ::std::option::Option::Some(#chunk_var) => ::std::option::Option::Some(#decoded),
+                        ::std::option::Option::None => ::std::option::Option::None,
+                    };
+                });
+            }
+            (ChunkSource::Id { id, mode }, Cardinality::Default) => {
+                let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
+                stmts.push(quote! {
+                    let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
+                        ::std::option::Option::Some(#chunk_var) => #decoded,
+                        ::std::option::Option::None => ::std::default::Default::default(),
+                    };
+                });
+            }
+            (ChunkSource::Id { id, mode }, Cardinality::DefaultExpr(expr)) => {
+                let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
+                stmts.push(quote! {
+                    let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
+                        ::std::option::Option::Some(#chunk_var) => #decoded,
+                        ::std::option::Option::None => #expr,
+                    };
+                });
+            }
+            (ChunkSource::Id { id, mode }, Cardinality::Repeated(inner)) => {
+                let decoded = decode_chunk_expr(*mode, inner, &spec.wire_format, &chunk_var);
+                stmts.push(quote! {
+                    let mut #fident: ::std::vec::Vec<#inner> = ::std::vec::Vec::new();
+                    while let ::std::option::Option::Some(#chunk_var) = __chunks.try_expect_chunk(#id)? {
+                        #fident.push(#decoded);
+                    }
+                });
+            }
+            (ChunkSource::Stream, Cardinality::Required) => {
+                let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
+                let taken = quote!(__chunks.expect_item::<#read_ty>()?);
+                let converted = if let Some(wty) = &spec.wire_format {
+                    quote!(<#fty as ::std::convert::From<#wty>>::from(#taken))
+                } else {
+                    taken
+                };
+                stmts.push(quote! {
+                    let #fident: #fty = #converted;
+                });
+            }
+            (ChunkSource::Stream, Cardinality::Optional(inner)) => {
+                let read_ty = spec.wire_format.as_ref().unwrap_or(inner);
+                let conv = if let Some(wty) = &spec.wire_format {
+                    quote!(__chunks.try_expect_item::<#read_ty>()?.map(<#inner as ::std::convert::From<#wty>>::from))
+                } else {
+                    quote!(__chunks.try_expect_item::<#inner>()?)
+                };
+                stmts.push(quote! {
+                    let #fident: #fty = #conv;
+                });
+            }
+            (ChunkSource::Stream, Cardinality::Default) => {
+                let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
+                let conv = if let Some(wty) = &spec.wire_format {
+                    quote!(<#fty as ::std::convert::From<#wty>>::from(__v))
+                } else {
+                    quote!(__v)
+                };
+                stmts.push(quote! {
+                    let #fident: #fty = match __chunks.try_expect_item::<#read_ty>()? {
+                        ::std::option::Option::Some(__v) => #conv,
+                        ::std::option::Option::None => ::std::default::Default::default(),
+                    };
+                });
+            }
+            (ChunkSource::Stream, Cardinality::DefaultExpr(expr)) => {
+                let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
+                let conv = if let Some(wty) = &spec.wire_format {
+                    quote!(<#fty as ::std::convert::From<#wty>>::from(__v))
+                } else {
+                    quote!(__v)
+                };
+                stmts.push(quote! {
+                    let #fident: #fty = match __chunks.try_expect_item::<#read_ty>()? {
+                        ::std::option::Option::Some(__v) => #conv,
+                        ::std::option::Option::None => #expr,
+                    };
+                });
+            }
+            (ChunkSource::Stream, Cardinality::Repeated(inner)) => {
+                let read_ty = spec.wire_format.as_ref().unwrap_or(inner);
+                let conv = if let Some(wty) = &spec.wire_format {
+                    quote!(<#inner as ::std::convert::From<#wty>>::from(__item))
+                } else {
+                    quote!(__item)
+                };
+                stmts.push(quote! {
+                    let mut #fident: ::std::vec::Vec<#inner> = ::std::vec::Vec::new();
+                    while let ::std::option::Option::Some(__item) = __chunks.try_expect_item::<#read_ty>()? {
+                        #fident.push(#conv);
+                    }
+                });
+            }
+        }
+        inits.push(quote!(#fident));
+    }
+
+    let first_match = if let Some(first) = specs.first() {
+        match (&first.source, &first.cardinality) {
+            (ChunkSource::Id { id, .. }, _) => quote!(__id == (#id)),
+            (ChunkSource::Stream, Cardinality::Optional(inner) | Cardinality::Repeated(inner)) => {
+                let read_ty = first.wire_format.as_ref().unwrap_or(inner);
+                quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__id))
+            }
+            (ChunkSource::Stream, _) => {
+                let read_ty = first.wire_format.as_ref().unwrap_or(first.ty);
+                quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__id))
+            }
+        }
+    } else {
+        quote!(false)
+    };
+
+    (stmts, inits, first_match)
+}
+
+fn expand_chunk_structure(input: DeriveInput) -> Result<TokenStream2> {
+    let Data::Struct(data) = &input.data else {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "ChunkStructure can only be derived for structs (use ChunkStreamItem for chunk-tagged enums)",
+        ));
+    };
+    let Fields::Named(named) = &data.fields else {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "ChunkStructure requires a struct with named fields",
+        ));
+    };
+
+    let container_attrs = parse_chunk_container_attrs(&input)?;
+    let Some(mode) = container_attrs.mode else {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "ChunkStructure requires an explicit `#[chunk(map)]` or `#[chunk(sequence)]` attribute",
+        ));
+    };
+
+    let mut specs = Vec::new();
+    for f in &named.named {
+        specs.push(parse_chunk_field(f)?);
+    }
+
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause, lt) =
+        split_generics_with_borrow_lt(&input.generics);
+
+    if mode == ContainerOrderMode::Sequence {
+        let (stmts, inits, _) = build_sequence_chunk_stmts(&specs, &lt);
+
+        let finish_check = if container_attrs.ignore_unknown {
+            quote! {
+                for __rem in __chunks {
+                    let _ = __rem?;
+                }
+            }
+        } else {
+            quote! {
+                __chunks.expect_empty()?;
+            }
+        };
+
+        Ok(quote! {
+            impl #impl_generics ::petro_chunked::chunks::ChunkStructure<#lt> for #name #ty_generics #where_clause {
+                fn collect(mut __chunks: ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkErrorV2> {
+                    #(#stmts)*
+                    #finish_check
+                    ::std::result::Result::Ok(Self { #(#inits),* })
+                }
+            }
+        })
+    } else {
+        let mut collectors = Vec::new();
+        let mut stream_branches = Vec::new();
+        let mut id_arms = Vec::new();
+        let mut finishes = Vec::new();
+        let chunk_var = format_ident!("__chunk");
+
+        for spec in &specs {
+            let fident = spec.ident;
+            let fname_str = fident.to_string();
+            let fty = spec.ty;
+
+            let representative_id = match &spec.source {
+                ChunkSource::Id { id, .. } => quote!(#id),
+                ChunkSource::Stream => quote!(0u32),
+            };
+
+            let (collector_init, inner_ty, finish_expr) = match &spec.cardinality {
+                Cardinality::Required => (
+                    quote!(::petro_chunked::_macro_util::RequiredChunkEntry::<#fty>::new()),
+                    fty,
+                    quote!(#fident.finish(#representative_id, #fname_str)?),
+                ),
+                Cardinality::Optional(inner) => (
+                    quote!(::petro_chunked::_macro_util::OptionalChunkEntry::<#inner>::new()),
+                    *inner,
+                    quote!(#fident.finish(#representative_id, #fname_str)?),
+                ),
+                Cardinality::Default => (
+                    quote!(::petro_chunked::_macro_util::OptionalChunkEntry::<#fty>::new()),
+                    fty,
+                    quote!(#fident.finish_or_default()?),
+                ),
+                Cardinality::DefaultExpr(expr) => (
+                    quote!(::petro_chunked::_macro_util::OptionalChunkEntry::<#fty>::new()),
+                    fty,
+                    quote!(#fident.finish_or_else(|| #expr)?),
+                ),
+                Cardinality::Repeated(inner) => (
+                    quote!(::petro_chunked::_macro_util::RepeatedChunkEntry::<#inner>::new()),
+                    *inner,
+                    quote!(#fident.finish(#representative_id, #fname_str)?),
+                ),
+            };
+
+            collectors.push(quote! {
+                let mut #fident = #collector_init;
+            });
+
+            match &spec.source {
+                ChunkSource::Id { id, mode } => {
+                    let decoded = decode_chunk_expr(*mode, inner_ty, &spec.wire_format, &chunk_var);
+                    id_arms.push(quote! {
+                        __id if __id == (#id) => {
+                            #fident.add_value(__id, #fname_str, #decoded)?;
+                        }
+                    });
+                }
+                ChunkSource::Stream => {
+                    let read_ty = spec.wire_format.as_ref().unwrap_or(inner_ty);
+                    let taken = quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::take_from_chunks(&mut __chunks)?);
+                    let converted = if let Some(wty) = &spec.wire_format {
+                        quote!(<#inner_ty as ::std::convert::From<#wty>>::from(#taken))
+                    } else {
+                        taken
+                    };
+                    stream_branches.push(quote! {
+                        if <#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__peek_id) {
+                            let __val = #converted;
+                            #fident.add_value(__peek_id, #fname_str, __val)?;
+                            continue;
+                        }
+                    });
+                }
+            }
+
+            finishes.push(quote! {
+                #fident: #finish_expr
+            });
+        }
+
+        let fallback_arm = if container_attrs.ignore_unknown {
+            quote!(_ => {})
+        } else {
+            quote!(__id => return ::std::result::Result::Err(::petro_chunked::_macro_util::unexpected_chunk(__id)))
+        };
+
+        Ok(quote! {
+            impl #impl_generics ::petro_chunked::chunks::ChunkStructure<#lt> for #name #ty_generics #where_clause {
+                fn collect(mut __chunks: ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkErrorV2> {
+                    #(#collectors)*
+                    while let ::std::option::Option::Some(__peek_id) = __chunks.peek_id()? {
+                        #(#stream_branches)*
+                        let #chunk_var = __chunks.next().unwrap()?;
+                        match #chunk_var.id() {
+                            #(#id_arms)*
+                            #fallback_arm
+                        }
+                    }
+                    ::std::result::Result::Ok(Self {
+                        #(#finishes),*
+                    })
+                }
+            }
+        })
+    }
+}
+
+fn expand_chunk_stream_item(input: DeriveInput) -> Result<TokenStream2> {
     match &input.data {
-        Data::Struct(data) => expand_from_chunks_struct(&input, data),
-        Data::Enum(data) => expand_from_chunks_enum(&input, data),
+        Data::Enum(data) => expand_chunk_stream_item_enum(&input, data),
+        Data::Struct(data) => expand_chunk_stream_item_struct(&input, data),
         Data::Union(_) => Err(Error::new_spanned(
-            &input,
-            "FromChunks cannot be derived for unions",
+            &input.ident,
+            "ChunkStreamItem cannot be derived for unions",
         )),
     }
 }
 
-fn expand_from_chunks_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<TokenStream2> {
+fn expand_chunk_stream_item_struct(
+    input: &DeriveInput,
+    data: &syn::DataStruct,
+) -> Result<TokenStream2> {
+    let Fields::Named(named) = &data.fields else {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "ChunkStreamItem struct requires named fields",
+        ));
+    };
+
+    let container_attrs = parse_chunk_container_attrs(input)?;
+    if container_attrs.mode == Some(ContainerOrderMode::Map) {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "ChunkStreamItem cannot be derived for `#[chunk(map)]` structs; stream items must be sequential",
+        ));
+    }
+
+    let mut specs = Vec::new();
+    for f in &named.named {
+        specs.push(parse_chunk_field(f)?);
+    }
+
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause, lt) =
+        split_generics_with_borrow_lt(&input.generics);
+
+    let (stmts, inits, first_match) = build_sequence_chunk_stmts(&specs, &lt);
+
+    Ok(quote! {
+        impl #impl_generics ::petro_chunked::chunks::ChunkStreamItem<#lt> for #name #ty_generics #where_clause {
+            fn matches_start(__id: u32) -> bool {
+                #first_match
+            }
+
+            fn take_from_chunks(__chunks: &mut ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkErrorV2> {
+                #(#stmts)*
+                ::std::result::Result::Ok(Self { #(#inits),* })
+            }
+        }
+    })
+}
+
+fn expand_chunk_stream_item_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<TokenStream2> {
     if data.variants.is_empty() {
         return Err(Error::new_spanned(
-            input,
-            "FromChunks enum must have at least one variant",
+            &input.ident,
+            "ChunkStreamItem enum must have at least one variant",
         ));
     }
 
@@ -927,14 +1270,14 @@ fn expand_from_chunks_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<
         for attr in &variant.attrs {
             if attr.path().is_ident("chunk") {
                 if parsed_attr.is_some() {
-                    return Err(Error::new_spanned(attr, "duplicate #[chunk] attribute"));
+                    return Err(Error::new_spanned(&attr.meta, "duplicate #[chunk] attribute"));
                 }
                 parsed_attr = Some(attr.parse_args()?);
             }
         }
         let Some(parsed) = parsed_attr else {
             return Err(Error::new_spanned(
-                variant,
+                vident,
                 "missing #[chunk(<id>)] attribute on enum variant",
             ));
         };
@@ -961,8 +1304,8 @@ fn expand_from_chunks_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<
                     }
                     _ => {
                         return Err(Error::new_spanned(
-                            variant,
-                            "FromChunks enum variants must be a 1-element tuple variant `Variant(T)` or a unit variant `Variant`",
+                            vident,
+                            "ChunkStreamItem enum variants must be a 1-element tuple variant `Variant(T)` or a unit variant `Variant`",
                         ));
                     }
                 };
@@ -975,13 +1318,13 @@ fn expand_from_chunks_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<
             ChunkSource::Stream => {
                 let Fields::Unnamed(fields) = &variant.fields else {
                     return Err(Error::new_spanned(
-                        variant,
+                        vident,
                         "`#[chunk(stream)]` enum variant must be a 1-element tuple variant `Variant(T)`",
                     ));
                 };
                 if fields.unnamed.len() != 1 {
                     return Err(Error::new_spanned(
-                        variant,
+                        vident,
                         "`#[chunk(stream)]` enum variant must be a 1-element tuple variant `Variant(T)`",
                     ));
                 }
@@ -1011,311 +1354,15 @@ fn expand_from_chunks_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<
                 #(#match_checks)||*
             }
 
-            fn take_from_chunks(__chunks: &mut ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkError> {
+            fn take_from_chunks(__chunks: &mut ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkErrorV2> {
                 let Some(__peek_id) = __chunks.peek_id()? else {
-                    return ::std::result::Result::Err(::petro_chunked::ChunkError::EndOfChunks);
+                    return ::std::result::Result::Err(::petro_chunked::ChunkError::EndOfChunks.into());
                 };
                 match __peek_id {
                     #(#parse_arms)*
-                    __id => ::std::result::Result::Err(::petro_chunked::ChunkError::UnexpectedChunk { id: __id }),
+                    __id => ::std::result::Result::Err(::petro_chunked::_macro_util::unexpected_chunk(__id)),
                 }
             }
         }
     })
-}
-
-fn expand_from_chunks_struct(input: &DeriveInput, data: &syn::DataStruct) -> Result<TokenStream2> {
-    let Fields::Named(named) = &data.fields else {
-        return Err(Error::new_spanned(
-            input,
-            "FromChunks requires a struct with named fields",
-        ));
-    };
-
-    let container_attrs = parse_chunk_container_attrs(input)?;
-    let mut specs = Vec::new();
-    for f in &named.named {
-        specs.push(parse_chunk_field(f)?);
-    }
-
-    let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause, lt) =
-        split_generics_with_borrow_lt(&input.generics);
-
-    if container_attrs.mode == ContainerOrderMode::Sequence {
-        let mut stmts = Vec::new();
-        let mut inits = Vec::new();
-        let chunk_var = format_ident!("__chunk");
-
-        for spec in &specs {
-            let fident = &spec.ident;
-            let fty = &spec.ty;
-
-            match (&spec.source, &spec.cardinality) {
-                (ChunkSource::Id { id, mode }, Cardinality::Required) => {
-                    let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
-                    stmts.push(quote! {
-                        let #chunk_var = __chunks.expect_chunk(#id)?;
-                        let #fident: #fty = #decoded;
-                    });
-                }
-                (ChunkSource::Id { id, mode }, Cardinality::Optional(inner)) => {
-                    let decoded = decode_chunk_expr(*mode, inner, &spec.wire_format, &chunk_var);
-                    stmts.push(quote! {
-                        let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
-                            ::std::option::Option::Some(#chunk_var) => ::std::option::Option::Some(#decoded),
-                            ::std::option::Option::None => ::std::option::Option::None,
-                        };
-                    });
-                }
-                (ChunkSource::Id { id, mode }, Cardinality::Default) => {
-                    let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
-                    stmts.push(quote! {
-                        let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
-                            ::std::option::Option::Some(#chunk_var) => #decoded,
-                            ::std::option::Option::None => ::std::default::Default::default(),
-                        };
-                    });
-                }
-                (ChunkSource::Id { id, mode }, Cardinality::DefaultExpr(expr)) => {
-                    let decoded = decode_chunk_expr(*mode, fty, &spec.wire_format, &chunk_var);
-                    stmts.push(quote! {
-                        let #fident: #fty = match __chunks.try_expect_chunk(#id)? {
-                            ::std::option::Option::Some(#chunk_var) => #decoded,
-                            ::std::option::Option::None => #expr,
-                        };
-                    });
-                }
-                (ChunkSource::Id { id, mode }, Cardinality::Repeated(inner)) => {
-                    let decoded = decode_chunk_expr(*mode, inner, &spec.wire_format, &chunk_var);
-                    stmts.push(quote! {
-                        let mut #fident: ::std::vec::Vec<#inner> = ::std::vec::Vec::new();
-                        while let ::std::option::Option::Some(#chunk_var) = __chunks.try_expect_chunk(#id)? {
-                            #fident.push(#decoded);
-                        }
-                    });
-                }
-                (ChunkSource::Stream, Cardinality::Required) => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
-                    let taken = quote!(__chunks.expect_item::<#read_ty>()?);
-                    let converted = if let Some(wty) = &spec.wire_format {
-                        quote!(<#fty as ::std::convert::From<#wty>>::from(#taken))
-                    } else {
-                        taken
-                    };
-                    stmts.push(quote! {
-                        let #fident: #fty = #converted;
-                    });
-                }
-                (ChunkSource::Stream, Cardinality::Optional(inner)) => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(inner);
-                    let conv = if let Some(wty) = &spec.wire_format {
-                        quote!(__chunks.try_expect_item::<#read_ty>()?.map(<#inner as ::std::convert::From<#wty>>::from))
-                    } else {
-                        quote!(__chunks.try_expect_item::<#inner>()?)
-                    };
-                    stmts.push(quote! {
-                        let #fident: #fty = #conv;
-                    });
-                }
-                (ChunkSource::Stream, Cardinality::Default) => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
-                    let conv = if let Some(wty) = &spec.wire_format {
-                        quote!(<#fty as ::std::convert::From<#wty>>::from(__v))
-                    } else {
-                        quote!(__v)
-                    };
-                    stmts.push(quote! {
-                        let #fident: #fty = match __chunks.try_expect_item::<#read_ty>()? {
-                            ::std::option::Option::Some(__v) => #conv,
-                            ::std::option::Option::None => ::std::default::Default::default(),
-                        };
-                    });
-                }
-                (ChunkSource::Stream, Cardinality::DefaultExpr(expr)) => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(fty);
-                    let conv = if let Some(wty) = &spec.wire_format {
-                        quote!(<#fty as ::std::convert::From<#wty>>::from(__v))
-                    } else {
-                        quote!(__v)
-                    };
-                    stmts.push(quote! {
-                        let #fident: #fty = match __chunks.try_expect_item::<#read_ty>()? {
-                            ::std::option::Option::Some(__v) => #conv,
-                            ::std::option::Option::None => #expr,
-                        };
-                    });
-                }
-                (ChunkSource::Stream, Cardinality::Repeated(inner)) => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(inner);
-                    let conv = if let Some(wty) = &spec.wire_format {
-                        quote!(<#inner as ::std::convert::From<#wty>>::from(__item))
-                    } else {
-                        quote!(__item)
-                    };
-                    stmts.push(quote! {
-                        let mut #fident: ::std::vec::Vec<#inner> = ::std::vec::Vec::new();
-                        while let ::std::option::Option::Some(__item) = __chunks.try_expect_item::<#read_ty>()? {
-                            #fident.push(#conv);
-                        }
-                    });
-                }
-            }
-            inits.push(quote!(#fident));
-        }
-
-        let first_match = if let Some(first) = specs.first() {
-            match (&first.source, &first.cardinality) {
-                (ChunkSource::Id { id, .. }, _) => quote!(__id == (#id)),
-                (ChunkSource::Stream, Cardinality::Optional(inner) | Cardinality::Repeated(inner)) => {
-                    let read_ty = first.wire_format.as_ref().unwrap_or(inner);
-                    quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__id))
-                }
-                (ChunkSource::Stream, _) => {
-                    let read_ty = first.wire_format.as_ref().unwrap_or(&first.ty);
-                    quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__id))
-                }
-            }
-        } else {
-            quote!(false)
-        };
-
-        let finish_check = if container_attrs.ignore_unknown {
-            quote! {
-                for __rem in __chunks {
-                    let _ = __rem?;
-                }
-            }
-        } else {
-            quote! {
-                __chunks.expect_empty()?;
-            }
-        };
-
-        Ok(quote! {
-            impl #impl_generics ::petro_chunked::chunks::ChunkStreamItem<#lt> for #name #ty_generics #where_clause {
-                fn matches_start(__id: u32) -> bool {
-                    #first_match
-                }
-
-                fn take_from_chunks(__chunks: &mut ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkError> {
-                    #(#stmts)*
-                    ::std::result::Result::Ok(Self { #(#inits),* })
-                }
-            }
-
-            impl #impl_generics ::petro_chunked::chunks::ChunkStructure<#lt> for #name #ty_generics #where_clause {
-                fn collect(mut __chunks: ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkError> {
-                    let __res = <Self as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::take_from_chunks(&mut __chunks)?;
-                    #finish_check
-                    ::std::result::Result::Ok(__res)
-                }
-            }
-        })
-    } else {
-        let mut collectors = Vec::new();
-        let mut stream_branches = Vec::new();
-        let mut id_arms = Vec::new();
-        let mut finishes = Vec::new();
-        let chunk_var = format_ident!("__chunk");
-
-        for spec in &specs {
-            let fident = &spec.ident;
-            let fname_str = fident.to_string();
-            let fty = &spec.ty;
-
-            let representative_id = match &spec.source {
-                ChunkSource::Id { id, .. } => quote!(#id),
-                ChunkSource::Stream => quote!(0u32),
-            };
-
-            let (collector_init, inner_ty, finish_expr) = match &spec.cardinality {
-                Cardinality::Required => (
-                    quote!(::petro_chunked::chunks::RequiredChunkEntry::<#fty>::new()),
-                    fty.clone(),
-                    quote!(#fident.finish(#representative_id, #fname_str)?),
-                ),
-                Cardinality::Optional(inner) => (
-                    quote!(::petro_chunked::chunks::OptionalChunkEntry::<#inner>::new()),
-                    inner.clone(),
-                    quote!(#fident.finish(#representative_id, #fname_str)?),
-                ),
-                Cardinality::Default => (
-                    quote!(::petro_chunked::chunks::OptionalChunkEntry::<#fty>::new()),
-                    fty.clone(),
-                    quote!(#fident.finish_or_default()?),
-                ),
-                Cardinality::DefaultExpr(expr) => (
-                    quote!(::petro_chunked::chunks::OptionalChunkEntry::<#fty>::new()),
-                    fty.clone(),
-                    quote!(#fident.finish_or_else(|| #expr)?),
-                ),
-                Cardinality::Repeated(inner) => (
-                    quote!(::petro_chunked::chunks::RepeatedChunkEntry::<#inner>::new()),
-                    inner.clone(),
-                    quote!(#fident.finish(#representative_id, #fname_str)?),
-                ),
-            };
-
-            collectors.push(quote! {
-                let mut #fident = #collector_init;
-            });
-
-            match &spec.source {
-                ChunkSource::Id { id, mode } => {
-                    let decoded = decode_chunk_expr(*mode, &inner_ty, &spec.wire_format, &chunk_var);
-                    id_arms.push(quote! {
-                        __id if __id == (#id) => {
-                            #fident.add_value(__id, #fname_str, #decoded)?;
-                        }
-                    });
-                }
-                ChunkSource::Stream => {
-                    let read_ty = spec.wire_format.as_ref().unwrap_or(&inner_ty);
-                    let taken = quote!(<#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::take_from_chunks(&mut __chunks)?);
-                    let converted = if let Some(wty) = &spec.wire_format {
-                        quote!(<#inner_ty as ::std::convert::From<#wty>>::from(#taken))
-                    } else {
-                        taken
-                    };
-                    stream_branches.push(quote! {
-                        if <#read_ty as ::petro_chunked::chunks::ChunkStreamItem<#lt>>::matches_start(__peek_id) {
-                            let __val = #converted;
-                            #fident.add_value(__peek_id, #fname_str, __val)?;
-                            continue;
-                        }
-                    });
-                }
-            }
-
-            finishes.push(quote! {
-                #fident: #finish_expr
-            });
-        }
-
-        let fallback_arm = if container_attrs.ignore_unknown {
-            quote!(_ => {})
-        } else {
-            quote!(__id => return ::std::result::Result::Err(::petro_chunked::chunks::unexpected_chunk(__id)))
-        };
-
-        Ok(quote! {
-            impl #impl_generics ::petro_chunked::chunks::ChunkStructure<#lt> for #name #ty_generics #where_clause {
-                fn collect(mut __chunks: ::petro_chunked::chunks::ChunksIter<#lt>) -> ::std::result::Result<Self, ::petro_chunked::ChunkError> {
-                    #(#collectors)*
-                    while let ::std::option::Option::Some(__peek_id) = __chunks.peek_id()? {
-                        #(#stream_branches)*
-                        let #chunk_var = __chunks.next().unwrap()?;
-                        match #chunk_var.id() {
-                            #(#id_arms)*
-                            #fallback_arm
-                        }
-                    }
-                    ::std::result::Result::Ok(Self {
-                        #(#finishes),*
-                    })
-                }
-            }
-        })
-    }
 }
