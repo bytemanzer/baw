@@ -63,6 +63,8 @@ impl<'b> MiniChunksIter<'b> {
 
     /// Applies a sequence expectation to this mini chunk iterator. Must match the entire mini-chunk
     /// iterator!
+    #[deprecated(note = "use `#[derive(FromMiniChunks)]` with `MiniChunksIter::expect_struct` instead")]
+    #[allow(deprecated)]
     pub fn expect_sequence<S: SequenceExpectation>(
         mut self,
         expected: S,
@@ -155,6 +157,7 @@ impl<'b> FromByteBlock<'b> for MiniChunk<'b> {
     }
 }
 
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
 pub trait SequenceExpectation {
     type Output<'a>;
 
@@ -165,12 +168,14 @@ pub trait SequenceExpectation {
 }
 
 /// Required mini-chunk.
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
 #[derive(Copy, Clone)]
 pub struct Require<T> {
     id: u8,
     _output: PhantomData<T>,
 }
 
+#[allow(deprecated)]
 impl<T> SequenceExpectation for Require<T>
 where
     T: for<'a> FromByteBlock<'a>,
@@ -187,6 +192,8 @@ where
 }
 
 /// Creates an expectation for a required element in a mini chunk sequence.
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
+#[allow(deprecated)]
 pub fn require<T>(id: u8) -> Require<T> {
     Require {
         id,
@@ -195,6 +202,7 @@ pub fn require<T>(id: u8) -> Require<T> {
 }
 
 /// Optional mini-chunk.
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
 #[derive(Copy, Clone)]
 pub struct Opt<T> {
     id: u8,
@@ -202,6 +210,8 @@ pub struct Opt<T> {
 }
 
 /// Creates an expectation for an optional element in a mini chunk sequence.
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
+#[allow(deprecated)]
 pub fn opt<T>(id: u8) -> Opt<T> {
     Opt {
         id,
@@ -209,6 +219,7 @@ pub fn opt<T>(id: u8) -> Opt<T> {
     }
 }
 
+#[allow(deprecated)]
 impl<T> SequenceExpectation for Opt<T>
 where
     T: for<'a> FromByteBlock<'a>,
@@ -235,6 +246,7 @@ macro_rules! tuple_expectation {
       tuple_expectation!(@inner [ $t $($rest)* ]);
     };
     (@inner [ $($t:ident)* ]) => {
+        #[allow(deprecated)]
         impl<$($t,)*> SequenceExpectation for ( $($t,)* )
         where
         $(
@@ -333,6 +345,17 @@ impl<T> OptionalMapEntry<T> {
     pub fn finish(self, _id: u8, _name: &str) -> Result<Option<T>, ChunkError> {
         Ok(self.0)
     }
+
+    pub fn finish_or_default(self) -> Result<T, ChunkError>
+    where
+        T: Default,
+    {
+        Ok(self.0.unwrap_or_default())
+    }
+
+    pub fn finish_or_else(self, f: impl FnOnce() -> T) -> Result<T, ChunkError> {
+        Ok(self.0.unwrap_or_else(f))
+    }
 }
 
 /// Collection helper for [`mini_chunk_map`]
@@ -360,6 +383,7 @@ pub fn unexpected_chunk(id: u8) -> ChunkError {
 }
 
 #[doc(hidden)]
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
 #[macro_export]
 macro_rules! __mini_chunk_map {
     ($result:ident <$lt:lifetime> {
@@ -438,10 +462,13 @@ macro_rules! __mini_chunk_map {
 }
 
 /// Create a map-based mini-chunk expectation.
+#[deprecated(note = "use `#[derive(FromMiniChunks)]` instead")]
+#[allow(deprecated)]
 pub use __mini_chunk_map as mini_chunk_map;
 use thiserror::Error;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::{MiniChunksIter, mini_chunk_map};
 

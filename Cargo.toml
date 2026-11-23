@@ -9,6 +9,7 @@ members = [
     "bevy-alo",
     "petro-alo",
     "petro-chunked",
+    "petro-chunked-derive",
 ]
 
 [profile.dev]
