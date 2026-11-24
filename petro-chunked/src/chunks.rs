@@ -193,9 +193,7 @@ impl<'b> Chunk<'b> {
 
     /// Reads this chunk's plain data content as `T`, wrapping any error with this chunk's ID.
     pub fn read_data<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkErrorV2> {
-        self.data()
-            .and_then(|d| d.convert())
-            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
+        self.data().and_then(|d| d.convert()).map_err(Into::into)
     }
 
     /// Reads this chunk's content as a mini-chunk structure `M`, wrapping any error with this
@@ -203,18 +201,14 @@ impl<'b> Chunk<'b> {
     pub fn read_mini_chunks<M: MiniChunkStructure<'b>>(&self) -> Result<M, ChunkErrorV2> {
         self.data()
             .and_then(|d| d.as_mini_chunks().expect_struct())
-            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
+            .map_err(Into::into)
     }
 
     /// Reads this chunk's child chunks as a chunk structure `C`, wrapping any error with this
     /// chunk's ID.
     pub fn read_children<C: ChunkStructure<'b>>(&self) -> Result<C, ChunkErrorV2> {
-        let children = self
-            .children()
-            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))?;
-        children
-            .expect_struct()
-            .map_err(|e| e.err_to_data(self.id))
+        let children = self.children()?;
+        children.expect_struct().map_err(Into::into)
     }
 }
 

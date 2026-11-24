@@ -1,11 +1,14 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{
     Attribute, Data, DeriveInput, Error, Expr, Fields, Generics, Ident, Lifetime, Result, Token,
     Type,
 };
+
+mod byteblock;
+mod util;
 
 /// Derives `petro_chunked::byteblock::FromByteBlock` for a struct.
 ///
@@ -18,7 +21,7 @@ use syn::{
 #[proc_macro_derive(FromByteBlock, attributes(byte_block))]
 pub fn derive_from_byte_block(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    expand_from_byte_block(input)
+    byteblock::derive_from_byte_block(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -101,7 +104,12 @@ pub fn derive_chunk_stream_item(input: TokenStream) -> TokenStream {
 /// by a borrow lifetime `'b` (like `FromByteBlock<'b>`, `MiniChunkStructure<'b>`, `ChunkStructure<'b>`).
 fn split_generics_with_borrow_lt(
     generics: &Generics,
-) -> (TokenStream2, TokenStream2, Option<&syn::WhereClause>, Lifetime) {
+) -> (
+    TokenStream2,
+    TokenStream2,
+    Option<&syn::WhereClause>,
+    Lifetime,
+) {
     let (_, ty_generics, where_clause) = generics.split_for_impl();
     let ty_generics_tokens = quote!(#ty_generics);
 
@@ -116,12 +124,7 @@ fn split_generics_with_borrow_lt(
         for param in &generics.params {
             params.push(quote!(#param));
         }
-        (
-            quote!(<#(#params),*>),
-            ty_generics_tokens,
-            where_clause,
-            lt,
-        )
+        (quote!(<#(#params),*>), ty_generics_tokens, where_clause, lt)
     }
 }
 
@@ -134,37 +137,6 @@ enum ContainerOrderMode {
 // =================================================================================================
 // FromByteBlock
 // =================================================================================================
-
-#[derive(Default)]
-struct ByteBlockAttrs {
-    pad_after: Option<Expr>,
-    wire_format: Option<Type>,
-}
-
-fn parse_byte_block_attrs(attrs: &[Attribute], allow_wire_format: bool) -> Result<ByteBlockAttrs> {
-    let mut out = ByteBlockAttrs::default();
-    for attr in attrs {
-        if !attr.path().is_ident("byte_block") {
-            continue;
-        }
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("pad_after") {
-                let value = meta.value()?;
-                out.pad_after = Some(value.parse()?);
-                Ok(())
-            } else if allow_wire_format && meta.path.is_ident("wire_format") {
-                let value = meta.value()?;
-                out.wire_format = Some(value.parse()?);
-                Ok(())
-            } else if allow_wire_format {
-                Err(meta.error("unsupported #[byte_block] attribute; expected `pad_after = ...` or `wire_format = ...`"))
-            } else {
-                Err(meta.error("unsupported container #[byte_block] attribute; expected `pad_after = ...`"))
-            }
-        })?;
-    }
-    Ok(out)
-}
 
 fn expand_from_byte_block(input: DeriveInput) -> Result<TokenStream2> {
     let Data::Struct(data) = &input.data else {
@@ -443,10 +415,7 @@ fn parse_mini_chunk_field<'a>(field: &'a syn::Field) -> Result<MiniChunkFieldSpe
         Cardinality::Default
     } else if parsed.optional {
         let inner = extract_generic_inner(ty, "Option").ok_or_else(|| {
-            Error::new_spanned(
-                ty,
-                "`optional` mini_chunk field must have type `Option<T>`",
-            )
+            Error::new_spanned(ty, "`optional` mini_chunk field must have type `Option<T>`")
         })?;
         Cardinality::Optional(inner)
     } else {
@@ -824,7 +793,10 @@ fn parse_chunk_field<'a>(field: &'a syn::Field) -> Result<ChunkFieldSpec<'a>> {
     for attr in &field.attrs {
         if attr.path().is_ident("chunk") {
             if parsed_attr.is_some() {
-                return Err(Error::new_spanned(&attr.meta, "duplicate #[chunk] attribute"));
+                return Err(Error::new_spanned(
+                    &attr.meta,
+                    "duplicate #[chunk] attribute",
+                ));
             }
             parsed_attr = Some(attr.parse_args()?);
         }
@@ -1249,7 +1221,10 @@ fn expand_chunk_stream_item_struct(
     })
 }
 
-fn expand_chunk_stream_item_enum(input: &DeriveInput, data: &syn::DataEnum) -> Result<TokenStream2> {
+fn expand_chunk_stream_item_enum(
+    input: &DeriveInput,
+    data: &syn::DataEnum,
+) -> Result<TokenStream2> {
     if data.variants.is_empty() {
         return Err(Error::new_spanned(
             &input.ident,
@@ -1270,7 +1245,10 @@ fn expand_chunk_stream_item_enum(input: &DeriveInput, data: &syn::DataEnum) -> R
         for attr in &variant.attrs {
             if attr.path().is_ident("chunk") {
                 if parsed_attr.is_some() {
-                    return Err(Error::new_spanned(&attr.meta, "duplicate #[chunk] attribute"));
+                    return Err(Error::new_spanned(
+                        &attr.meta,
+                        "duplicate #[chunk] attribute",
+                    ));
                 }
                 parsed_attr = Some(attr.parse_args()?);
             }

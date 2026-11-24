@@ -1,14 +1,9 @@
 //! Wire format adapter types for use with `wire_format = <Type>` in derive attributes.
 
+use std::num::TryFromIntError;
+
 use crate::byteblock::{FromByteBlock, TakeBytes};
 use crate::error::{ChunkError, ChunkErrorKind, ChunkErrorV2};
-
-/// Error returned when a wire boolean value is neither `0` nor `1`.
-#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
-#[error("Expected a boolean value (0 or 1), but found {raw}")]
-pub struct InvalidBoolValueError {
-    pub raw: u32,
-}
 
 /// Wire format type for a boolean stored as a single byte (`0` or `1`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -32,10 +27,10 @@ impl<'b> FromByteBlock<'b> for U8Bool {
         let value = match value {
             0 => false,
             1 => true,
-            _ => {
+            raw => {
                 return Err(ChunkErrorV2::new(
                     ChunkErrorKind::InvalidValue,
-                    InvalidBoolValueError { raw: value as u32 },
+                    format!("Expected a boolean value (0 or 1), but found {raw}"),
                 )
                 .into());
             }
@@ -66,10 +61,10 @@ impl<'b> FromByteBlock<'b> for U32Bool {
         let value = match value {
             0 => false,
             1 => true,
-            _ => {
+            raw => {
                 return Err(ChunkErrorV2::new(
                     ChunkErrorKind::InvalidValue,
-                    InvalidBoolValueError { raw: value },
+                    format!("Expected a boolean value (0 or 1), but found {raw}"),
                 )
                 .into());
             }
@@ -97,9 +92,9 @@ impl From<usize> for U32Usize {
 impl<'b> FromByteBlock<'b> for U32Usize {
     fn take_from(bytes: &'b [u8]) -> Result<(Self, &'b [u8]), ChunkError> {
         let (value, rest) = u32::take_from(bytes)?;
-        let value = value
-            .try_into()
-            .map_err(|e| ChunkErrorV2::new(ChunkErrorKind::InvalidValue, e))?;
+        let value = value.try_into().map_err(|e: TryFromIntError| {
+            ChunkErrorV2::new(ChunkErrorKind::InvalidValue, e.to_string())
+        })?;
         Ok((Self(value), rest))
     }
 }

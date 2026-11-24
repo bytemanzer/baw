@@ -6,8 +6,6 @@ pub use chunks::{Chunk, ChunkContent, ChunkStreamItem, ChunkStructure, iter_chun
 pub use error::{ChunkError, ChunkErrorKind, ChunkErrorV2};
 pub use minichunk::{MiniChunk, MiniChunkStructure, iter_mini_chunks};
 
-#[doc(hidden)]
-pub mod _macro_util;
 pub mod byteblock;
 pub mod chunks;
 pub mod content;
