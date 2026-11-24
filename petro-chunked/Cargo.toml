@@ -4,13 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["derive"]
+derive = ["dep:petro-chunked-derive"]
 glam = ["dep:glam"]
 
 [dependencies]
 anyhow = "1.0.104"
 glam = {version = "0.33.12", optional = true}
 byteorder = "1.5.0"
+petro-chunked-derive = { version = "0.1.0", path = "../petro-chunked-derive", optional = true }
 thiserror = "2.0.21"
 
 [dev-dependencies]

@@ -1,7 +1,9 @@
-use crate::ChunkError;
-use crate::byteblock::{FromByteBlock, FromFixedByteBlock, TakeBytes};
+use crate::byteblock::{ConvertBytes, FromByteBlock, FromFixedByteBlock, TakeBytes};
 use crate::content::DataOrMiniChunks;
-use crate::error::ChunkErrorContext;
+use crate::error::{ChunkError, ChunkErrorContext, ChunkErrorV2};
+use crate::minichunk::MiniChunkStructure;
+#[cfg(feature = "derive")]
+pub use petro_chunked_derive::{ChunkStreamItem, ChunkStructure};
 
 /// Interprets the bytes as containing chunks and gets an iterator over them.
 pub fn iter_chunks<'b>(data: &'b [u8]) -> ChunksIter<'b> {
@@ -52,6 +54,27 @@ impl<'b> ChunksIter<'b> {
             Some(Ok(chunk)) => Err(ChunkError::UnexpectedChunk { id: chunk.id() }),
             None => Ok(()),
         }
+    }
+
+    /// Applies a structure collector to this chunk iterator.
+    pub fn expect_struct<C: ChunkStructure<'b>>(self) -> Result<C, ChunkErrorV2> {
+        C::collect(self)
+    }
+
+    /// Pulls a single stream item (such as a chunk-tagged enum or a sequence struct spanning
+    /// one or more chunks) from this chunk iterator.
+    pub fn expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<I, ChunkErrorV2> {
+        I::take_from_chunks(self)
+    }
+
+    /// Pulls a single stream item if the next chunk ID matches the item's starting chunk ID.
+    pub fn try_expect_item<I: ChunkStreamItem<'b>>(&mut self) -> Result<Option<I>, ChunkErrorV2> {
+        if let Some(id) = self.peek_id()?
+            && I::matches_start(id)
+        {
+            return I::take_from_chunks(self).map(Some);
+        }
+        Ok(None)
     }
 }
 
@@ -167,6 +190,50 @@ impl<'b> Chunk<'b> {
     pub fn children(&self) -> Result<ChunksIter<'b>, ChunkError> {
         self.content().children()
     }
+
+    /// Reads this chunk's plain data content as `T`, wrapping any error with this chunk's ID.
+    pub fn read_data<T: FromByteBlock<'b>>(&self) -> Result<T, ChunkErrorV2> {
+        self.data()
+            .and_then(|d| d.convert())
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
+    }
+
+    /// Reads this chunk's content as a mini-chunk structure `M`, wrapping any error with this
+    /// chunk's ID.
+    pub fn read_mini_chunks<M: MiniChunkStructure<'b>>(&self) -> Result<M, ChunkErrorV2> {
+        self.data()
+            .and_then(|d| d.as_mini_chunks().expect_struct())
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))
+    }
+
+    /// Reads this chunk's child chunks as a chunk structure `C`, wrapping any error with this
+    /// chunk's ID.
+    pub fn read_children<C: ChunkStructure<'b>>(&self) -> Result<C, ChunkErrorV2> {
+        let children = self
+            .children()
+            .map_err(|e| ChunkErrorV2::from(e).err_to_data(self.id))?;
+        children
+            .expect_struct()
+            .map_err(|e| e.err_to_data(self.id))
+    }
+}
+
+/// A structure which is produced by consuming an entire [`ChunksIter`].
+pub trait ChunkStructure<'b>: Sized {
+    fn collect(chunks: ChunksIter<'b>) -> Result<Self, ChunkErrorV2>;
+}
+
+/// An item which is produced by pulling one or more chunks from a [`ChunksIter`].
+///
+/// This is implemented by chunk-tagged enums and sequence-mode chunk structs, allowing them to be
+/// embedded inside other chunk structures (including multi-chunk pairs like submeshes or particle
+/// tracks).
+pub trait ChunkStreamItem<'b>: Sized {
+    /// Returns true if a chunk with `id` can start this item.
+    fn matches_start(id: u32) -> bool;
+
+    /// Pulls one instance of `Self` from the chunk iterator.
+    fn take_from_chunks(chunks: &mut ChunksIter<'b>) -> Result<Self, ChunkErrorV2>;
 }
 
 /// Helper to unpack the chunk kind from the chunk length.

@@ -63,6 +63,8 @@ impl<'b> MiniChunksIter<'b> {
 
     /// Applies a sequence expectation to this mini chunk iterator. Must match the entire mini-chunk
     /// iterator!
+    #[deprecated(note = "use `#[derive(MiniChunkStructure)]` with `MiniChunksIter::expect_struct` instead")]
+    #[allow(deprecated)]
     pub fn expect_sequence<S: SequenceExpectation>(
         mut self,
         expected: S,
@@ -155,6 +157,7 @@ impl<'b> FromByteBlock<'b> for MiniChunk<'b> {
     }
 }
 
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
 pub trait SequenceExpectation {
     type Output<'a>;
 
@@ -165,12 +168,14 @@ pub trait SequenceExpectation {
 }
 
 /// Required mini-chunk.
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
 #[derive(Copy, Clone)]
 pub struct Require<T> {
     id: u8,
     _output: PhantomData<T>,
 }
 
+#[allow(deprecated)]
 impl<T> SequenceExpectation for Require<T>
 where
     T: for<'a> FromByteBlock<'a>,
@@ -187,6 +192,8 @@ where
 }
 
 /// Creates an expectation for a required element in a mini chunk sequence.
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
+#[allow(deprecated)]
 pub fn require<T>(id: u8) -> Require<T> {
     Require {
         id,
@@ -195,6 +202,7 @@ pub fn require<T>(id: u8) -> Require<T> {
 }
 
 /// Optional mini-chunk.
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
 #[derive(Copy, Clone)]
 pub struct Opt<T> {
     id: u8,
@@ -202,6 +210,8 @@ pub struct Opt<T> {
 }
 
 /// Creates an expectation for an optional element in a mini chunk sequence.
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
+#[allow(deprecated)]
 pub fn opt<T>(id: u8) -> Opt<T> {
     Opt {
         id,
@@ -209,6 +219,7 @@ pub fn opt<T>(id: u8) -> Opt<T> {
     }
 }
 
+#[allow(deprecated)]
 impl<T> SequenceExpectation for Opt<T>
 where
     T: for<'a> FromByteBlock<'a>,
@@ -235,6 +246,7 @@ macro_rules! tuple_expectation {
       tuple_expectation!(@inner [ $t $($rest)* ]);
     };
     (@inner [ $($t:ident)* ]) => {
+        #[allow(deprecated)]
         impl<$($t,)*> SequenceExpectation for ( $($t,)* )
         where
         $(
@@ -269,97 +281,11 @@ pub trait MiniChunkStructure<'a> {
         Self: Sized;
 }
 
-/// Format errors when handling mini-chunks as a map.
-#[derive(Error, Debug)]
-pub enum MapFormatError {
-    #[error("Found unexpected MiniChunk {id:0>2x}")]
-    UnexpectedChunk { id: u8 },
-    #[error("MiniChunk {id:0>2x} ({name}) appeared more than once")]
-    DuplicateChunk { id: u8, name: &'static str },
-    #[error("MiniChunk {id:0>2x} ({name}) was required but not found")]
-    MissingRequiredChunk { id: u8, name: &'static str },
-}
-
-/// Collection helper for [`mini_chunk_map`]
-#[doc(hidden)]
-pub struct RequiredMapEntry<T>(Option<T>);
-
-impl<T> RequiredMapEntry<T> {
-    pub fn new() -> Self {
-        Self(None)
-    }
-
-    pub fn add_value(&mut self, id: u8, name: &'static str, value: T) -> Result<(), ChunkError> {
-        if self.0.is_none() {
-            self.0 = Some(value);
-            Ok(())
-        } else {
-            Err(ChunkError::FormatError(
-                MapFormatError::DuplicateChunk { id, name }.into(),
-            ))
-        }
-    }
-
-    pub fn finish(self, id: u8, name: &'static str) -> Result<T, ChunkError> {
-        match self.0 {
-            Some(val) => Ok(val),
-            None => Err(ChunkError::FormatError(
-                MapFormatError::MissingRequiredChunk { id, name }.into(),
-            )),
-        }
-    }
-}
-
-/// Collection helper for [`mini_chunk_map`]
-#[doc(hidden)]
-pub struct OptionalMapEntry<T>(Option<T>);
-
-impl<T> OptionalMapEntry<T> {
-    pub fn new() -> Self {
-        Self(None)
-    }
-
-    pub fn add_value(&mut self, id: u8, name: &'static str, value: T) -> Result<(), ChunkError> {
-        if self.0.is_none() {
-            self.0 = Some(value);
-            Ok(())
-        } else {
-            Err(ChunkError::FormatError(
-                MapFormatError::DuplicateChunk { id, name }.into(),
-            ))
-        }
-    }
-
-    pub fn finish(self, _id: u8, _name: &str) -> Result<Option<T>, ChunkError> {
-        Ok(self.0)
-    }
-}
-
-/// Collection helper for [`mini_chunk_map`]
-#[doc(hidden)]
-pub struct RepeatedMapEntry<T>(Vec<T>);
-
-impl<T> RepeatedMapEntry<T> {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn add_value(&mut self, _id: u8, _name: &str, value: T) -> Result<(), ChunkError> {
-        self.0.push(value);
-        Ok(())
-    }
-
-    pub fn finish(self, _id: u8, _name: &str) -> Result<Vec<T>, ChunkError> {
-        Ok(self.0)
-    }
-}
+#[cfg(feature = "derive")]
+pub use petro_chunked_derive::MiniChunkStructure;
 
 #[doc(hidden)]
-pub fn unexpected_chunk(id: u8) -> ChunkError {
-    ChunkError::FormatError(MapFormatError::UnexpectedChunk { id }.into())
-}
-
-#[doc(hidden)]
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
 #[macro_export]
 macro_rules! __mini_chunk_map {
     ($result:ident <$lt:lifetime> {
@@ -401,7 +327,7 @@ macro_rules! __mini_chunk_map {
                                 <$crate::minichunk::MiniChunk<$lt> as $crate::byteblock::ConvertBytes<$lt>>::convert::<$t>(&chunk)?
                             )?,
                         )*
-                        id => return Err($crate::minichunk::unexpected_chunk(id)),
+                        id => return Err($crate::_macro_util::unexpected_mini_chunk(id)),
                     }
                 }
 
@@ -415,13 +341,13 @@ macro_rules! __mini_chunk_map {
         $crate::__mini_chunk_map!(@make_collector $t, required)
     };
     (@make_collector $t:ty, required) => {
-        $crate::minichunk::RequiredMapEntry::<$t>::new()
+        $crate::_macro_util::RequiredMapEntry::<$t>::new()
     };
     (@make_collector $t:ty, optional) => {
-        $crate::minichunk::OptionalMapEntry::<$t>::new()
+        $crate::_macro_util::OptionalMapEntry::<$t>::new()
     };
     (@make_collector $t:ty, repeated) => {
-        $crate::minichunk::RepeatedMapEntry::<$t>::new()
+        $crate::_macro_util::RepeatedMapEntry::<$t>::new()
     };
     (@make_out_type $t:ty) => {
         $crate::__mini_chunk_map!(@make_out_type $t, required)
@@ -438,10 +364,12 @@ macro_rules! __mini_chunk_map {
 }
 
 /// Create a map-based mini-chunk expectation.
+#[deprecated(note = "use `#[derive(MiniChunkStructure)]` instead")]
+#[allow(deprecated)]
 pub use __mini_chunk_map as mini_chunk_map;
-use thiserror::Error;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::{MiniChunksIter, mini_chunk_map};
 

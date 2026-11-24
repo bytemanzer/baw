@@ -421,6 +421,9 @@ macro_rules! tuple_takeable {
     };
 }
 
+#[cfg(feature = "derive")]
+pub use petro_chunked_derive::FromByteBlock;
+
 tuple_takeable!(A B C D E F G H I J K L M N O P Q R S T U V W X Y Z);
 
 #[cfg(test)]
